@@ -464,7 +464,7 @@ function reviewCard(j) {
   const ui = reviewUI[j.id] || {};
   const head = `<summary><span class="rsum-title">${esc(j.role)} <span>· ${esc(j.company)}${p ? ' · v' + p.version : ''}</span></span><span class="c-fit">${fitCell(j)}</span>${badge(p && p.status === 'approved' ? 'Approved' : s)}</summary>`;
   let body;
-  if (j.stage === 'drafting') body = `<p class="tiny"><span class="spin"></span>The assistant is drafting this pack.</p>`;
+  if (j.stage === 'drafting') { const rq = (S.cloud || []).find(r => r.status === 'waiting' && r.kind === 'pack' && r.ref?.job_id === j.id); body = `<p class="tiny"><span class="spin"></span>${rq ? `Your Northstar runner is drafting this pack (sent ${esc(fmtDate(rq.fired_at))}). It usually takes 5–10 minutes.` : 'The assistant is drafting this pack.'}</p>${rq && rq.error ? `<p class="tiny" style="color:var(--amber)">${esc(rq.error)}</p>` : ''}<div class="actions">${rq && rq.session_url ? `<a class="btn sm" href="${attr(rq.session_url)}" target="_blank" rel="noopener noreferrer">Watch ↗</a>` : ''}<button class="btn sm" data-act="stopDrafting" data-arg="${attr(j.id)}">Stop waiting</button></div>`; }
   else if (!p) body = `<p class="tiny">No draft yet for this role.</p><div class="actions"><button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Draft with the assistant' : 'Copy prompt for Claude'}</button><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Write it myself</button></div>${apiKey() ? '' : '<p class="tiny">No API key: Northstar gives you a prompt to paste into a Claude chat, then you paste the reply back.</p>'}`;
   else body = packBody(j, p);
   body = `<div class="actions" style="margin:0 0 10px"><a href="#" class="btn sm" data-act="openJob" data-arg="${attr(j.id)}">Role details</a>${j.job_url ? `<a class="btn sm" href="${attr(safeUrl(j.job_url))}" target="_blank" rel="noopener noreferrer">Listing ↗</a>` : ''}</div>` + body;
@@ -799,6 +799,12 @@ const ACT = {
     const req = (S.cloud || []).find(r => r.id === id); if (!req) return;
     openModal(`<div class="eyebrow">Northstar runner</div><h2>${esc(req.title)}</h2><p class="tiny">If the result has not arrived by itself, open the run with Watch, copy the runner's final answer and paste it here.</p><textarea id="cp-text" class="field" style="width:100%;min-height:180px" placeholder="Paste the runner's answer"></textarea><div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="cp-use">Use this result</button></div>`, 'wide');
     $('cp-use').onclick = async () => { const t = $('cp-text').value.trim(); if (!t) { toast('Paste the result first'); return; } try { await applyCloudResult(req, t); closeModal(); } catch (e) { toast(e.message); } };
+  },
+  async stopDrafting(jid) {
+    const j = job(jid); if (!j) return;
+    const rq = (S.cloud || []).find(r => r.status === 'waiting' && r.kind === 'pack' && r.ref?.job_id === jid);
+    if (rq) cloudCleanup(rq, 'removed'); else if (j.stage === 'drafting') j.stage = latestPack(jid) ? 'review' : 'shortlisted';
+    j.updated_at = now(); await save(); renderAll(); toast('Stopped waiting. You can send the pack again.');
   },
   async cloudRemove(id) {
     const req = (S.cloud || []).find(r => r.id === id); if (!req) return;
@@ -1266,7 +1272,7 @@ async function pollCloud(manual = false) {
       if (!r.ok) { problem = 'GitHub answered ' + r.status; break; }
       let d; try { d = JSON.parse(await r.text()); } catch { req.error = 'The result file could not be read. Use Paste result.'; continue; }
       if (d.request_id && d.request_id !== req.id) continue;
-      if (!d.ok) { req.error = 'The runner could not finish: ' + String(d.error || 'no reason given').slice(0, 300); await save(); renderCloud(); continue; }
+      if (!d.ok) { req.error = 'The runner could not finish: ' + String(d.error || 'no reason given').slice(0, 300); cloudCleanup(req, 'failed'); await save(); renderAll(); toast(`${req.title}: ${req.error} You can send it again.`); continue; }
       try { await applyCloudResult(req, String(d.answer || '')); got++; }
       catch (e) { req.error = e.message + ' Use Paste result to try again.'; await save(); renderCloud(); }
     }
