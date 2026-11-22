@@ -115,6 +115,21 @@ export async function draftPrep({ key, model, ...a }) {
   return text.trim();
 }
 
+/** Career profile › Answers › Suggest answer. Drafts only; the candidate approves each one. */
+export function answersPrompt({ questions, docs, answers, letters }) {
+  const confirmed = answers.filter(a => a.confirmed && !a.sensitive && a.answer && a.kind !== 'story').map(a => `- ${a.question}: ${a.answer}`).join('\n');
+  const stories = answers.filter(a => a.confirmed && a.answer && a.kind === 'story').map(a => `### ${a.question}\n${a.answer}`).join('\n\n');
+  const system = `You draft answers to job application form questions for one candidate, for the candidate to review. ${GUARD}\n` +
+    `Write in the candidate's own plain, first-person voice, as short as the question allows (a number, Yes/No, or a few sentences). ` +
+    `Use only what the documents below say. If they do not support an answer, leave "answer" empty and explain in "skip_reason". ` +
+    `Never answer questions about pay, salary, diversity or demographics, health, address, contact details, identity documents or criminal records: leave those empty. ` +
+    `List in "unsupported" every part of your draft the documents do not clearly back up, so the candidate can check it.\n\n` +
+    `<master_cv>\n${docs.master_cv}\n</master_cv>\n<confirmed_answers>\n${confirmed || 'none'}\n</confirmed_answers>\n<stories>\n${stories || 'none'}\n</stories>\n<approved_cover_letters>\n${letters || 'none'}\n</approved_cover_letters>`;
+  const user = `Draft an answer for each question below.\n<questions>\n${questions.map(q => `- id: ${q.id} | ${q.question}${q.scope && q.scope !== 'both' ? ' (for ' + q.scope + ' applications)' : ''}`).join('\n')}\n</questions>\n` +
+    'Reply with one ```json block only, in this shape:\n```json\n{"answers": [{"id": "...", "answer": "...", "based_on": "where in the documents this comes from, in a few words", "unsupported": ["any part the documents do not clearly back up"], "skip_reason": "why you left it empty, if you did"}]}\n```';
+  return { system, user };
+}
+
 /** One block of text to paste into a Claude chat (claude.ai) instead of using an API key. */
 export function chatPrompt({ system, user, tools }) {
   const web = tools && tools.length ? `\nUse web search to do this. ` : '';

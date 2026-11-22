@@ -567,7 +567,7 @@ function srcRow(s) {
   return `<div class="srcrow"><input type="checkbox" data-act="toggleSource" data-arg="${attr(s.id)}" ${s.enabled ? 'checked' : ''} aria-label="Use ${attr(s.name)}"><div><b>${esc(s.name)}</b>${s.notes ? `<div class="tiny">${esc(s.notes)}</div>` : ''}${s.url ? `<div class="tiny">${esc(s.url)}</div>` : ''}</div><span class="c-mkt tiny">${esc(s.market)}</span><span class="c-kind tag gray">${esc(s.kind || 'board')}</span><button class="btn sm" data-act="editSource" data-arg="${attr(s.id)}">Edit</button></div>`;
 }
 const ANSWER_GROUPS = [
-  ['Needs your answer', a => !(a.answer || '').trim()],
+  ['Needs your answer', a => !(a.answer || '').trim() || (a.draft && !a.confirmed)],
   ['Stories', a => a.kind === 'story'],
   ['Confirmed claims', a => a.kind === 'claim'],
   ['Pay', a => /salary|day rate|pay\b|compensation|remuneration|bonus/i.test(a.question)],
@@ -585,7 +585,9 @@ function answerGroupsHtml() {
   const q = norm(ansQuery);
   const hit = a => !q || norm(a.question).includes(q) || (!a.sensitive && norm(a.answer || '').includes(q));
   const by = {}; for (const a of S.answers) if (hit(a)) (by[answerGroupOf(a)] ||= []).push(a);
-  const body = ANSWER_GROUPS.map(([t]) => { const rs = by[t]; if (!rs) return ''; return `<details class="group" data-ansgroup="${attr(t)}" ${q || ansOpen.has(t) ? 'open' : ''}><summary>${esc(t)} <span class="count">${rs.length}</span></summary><div class="gbody">${rs.map(answerRow).join('')}</div></details>`; }).join('');
+  if (by['Needs your answer']) by['Needs your answer'].sort((x, y) => (y.seen || 1) - (x.seen || 1) || (x.draft ? 1 : 0) - (y.draft ? 1 : 0));
+  const body = ANSWER_GROUPS.map(([t]) => { const rs = by[t]; if (!rs) return '';
+    const bar = t === 'Needs your answer' ? suggestBar(rs) : ''; return `<details class="group" data-ansgroup="${attr(t)}" ${q || ansOpen.has(t) ? 'open' : ''}><summary>${esc(t)} <span class="count">${rs.length}</span></summary><div class="gbody">${bar}${rs.map(answerRow).join('')}</div></details>`; }).join('');
   const merged = (S.answer_merged || []).map((m, i) => ({ ...m, i })).filter(m => !m.alias);
   const mergedHtml = !q && merged.length ? `<details class="group"><summary>Merged duplicates <span class="count">${merged.length}</span></summary><div class="gbody"><p class="tiny">These repeated another answer, so Northstar keeps only one. They are stored here so nothing is lost; Restore puts one back.</p>${merged.map(m => `<div class="listrow"><span style="min-width:0"><b>${esc(m.item.question)}</b><br><span class="tiny">${m.item.sensitive ? '••••••' : esc((m.item.answer || '(empty)').slice(0, 120))} · merged into “${esc(m.into_question || '')}”</span></span><button class="btn sm" data-act="restoreMerged" data-arg="${m.i}">Restore</button></div>`).join('')}</div></details>` : '';
   return (body || `<div class="empty">${q ? 'No answers match your search.' : 'No saved answers yet.'}</div>`) + mergedHtml;
@@ -596,8 +598,72 @@ function answerRow(a) {
   const first = full.split('\n').find(l => l.trim()) || '';
   const preview = !full.trim() ? '<i>No answer yet</i>' : a.sensitive && !shown ? '••••••' : esc(first);
   const fullHtml = !full.trim() ? '<i>No answer yet</i>' : a.sensitive && !shown ? '••••••' : esc(full).replace(/\n/g, '<br>');
-  return `<details class="ansrow"><summary><b>${esc(a.question)}</b><span class="ansprev">${preview}</span></summary><div class="ansfull"><div>${fullHtml}</div><div class="tiny" style="margin-top:6px">${esc(a.scope === 'both' || !a.scope ? 'Both markets' : a.scope + ' only')} · ${a.confirmed ? 'confirmed' : '<b style="color:var(--amber)">not confirmed</b>'}</div><div class="actions" style="margin:8px 0 0">${a.sensitive && full.trim() ? `<button class="btn sm" data-act="reveal" data-arg="${attr(a.key)}">${shown ? 'Hide' : 'Show'}</button>` : ''}<button class="btn sm primary" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button></div></div></details>`;
+  const waiting = !full.trim(), isDraft = a.draft && !a.confirmed;
+  const tags = `${(a.seen || 1) > 1 ? `<span class="tag blue">Seen on ${a.seen} forms</span>` : ''}${isDraft ? '<span class="tag amber">Draft to review</span>' : ''}`;
+  const draftHtml = isDraft ? `<div class="notice" style="margin-top:8px"><b>Suggested by ${a.draft.source === 'match' ? 'Northstar' : 'Claude'}.</b> Based on: ${esc(a.draft.based_on || 'not stated')}.${(a.draft.flags || []).length ? `<div style="margin-top:4px;color:var(--amber)"><b>Check before approving:</b> ${a.draft.flags.map(esc).join('; ')}</div>` : ''}<div class="tiny" style="margin-top:4px">Not used on forms or in packs until you approve it.</div></div>` : '';
+  const suggestHtml = waiting ? (noDraft(a) ? '<div class="tiny" style="margin-top:6px">Pay, diversity and private details are never suggested. Please fill this one in yourself.</div>' : '') : '';
+  const btns = isDraft
+    ? `<button class="btn sm primary" data-act="approveDraft" data-arg="${attr(a.key)}">Approve</button><button class="btn sm" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button><button class="btn sm" data-act="discardDraft" data-arg="${attr(a.key)}">Discard draft</button>`
+    : `${waiting && !noDraft(a) ? `<button class="btn sm primary" data-act="suggestAnswer" data-arg="${attr(a.key)}">Suggest answer</button>` : ''}${a.sensitive && full.trim() ? `<button class="btn sm" data-act="reveal" data-arg="${attr(a.key)}">${shown ? 'Hide' : 'Show'}</button>` : ''}<button class="btn sm ${waiting && !noDraft(a) ? '' : 'primary'}" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button>`;
+  return `<details class="ansrow"><summary><b>${esc(a.question)}</b>${tags ? `<span class="anstags">${tags}</span>` : ''}<span class="ansprev">${preview}</span></summary><div class="ansfull"><div>${fullHtml}</div>${draftHtml}${suggestHtml}<div class="tiny" style="margin-top:6px">${esc(a.scope === 'both' || !a.scope ? 'Both markets' : a.scope + ' only')} · ${a.confirmed ? 'confirmed' : '<b style="color:var(--amber)">not confirmed</b>'}</div><div class="actions" style="margin:8px 0 0">${btns}</div></div></details>`;
 }
+/* ----- Suggested answers: drafts only, never used until approved ----- */
+const NO_DRAFT_RE = /salary|day rate|\bpay\b|compensation|remuneration|bonus|gender|sex you were|age band|\bage\b|ethnic|disabilit|orientation|religion|caring|socio-economic|armed forces|pronoun|address|phone|mobile|e-?mail|date of birth|\bdob\b|passport|national insurance|\bni number|social security|bank|criminal|convict|health|medical|referee|next of kin/i;
+function noDraft(a) { return a.sensitive || NO_DRAFT_RE.test(a.question || ''); }
+const STOP = new Set('a an the of to in on for and or with your you do are is be have has as at by any this that from what which how did does please if yes no work role job position company'.split(' '));
+const qTokens = q => new Set(norm(q).split(/[^a-z0-9]+/).filter(w => w.length > 1 && !STOP.has(w)));
+function sameQuestion(a, b) {
+  // a = the waiting question, b = one you answered. Match only when every key word of the new question is covered,
+  // so "Years of experience with Scrum" never borrows a general "Years of experience" answer.
+  const x = qTokens(a), y = qTokens(b); if (!x.size || !y.size) return false;
+  let inter = 0; for (const w of x) if (y.has(w)) inter++;
+  return inter === x.size && inter / y.size >= 0.5;
+}
+function suggestable() { return S.answers.filter(a => !(a.answer || '').trim() && !noDraft(a)); }
+function suggestBar(rs) {
+  const n = rs.filter(a => !(a.answer || '').trim() && !noDraft(a)).length;
+  const d = rs.filter(a => a.draft && !a.confirmed).length;
+  return n || d ? `<div class="notice" style="margin:0 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">${n ? `${n} question${n > 1 ? 's' : ''} can get a suggested answer from your CV, stories and saved answers.` : ''}${d ? ` ${d} draft${d > 1 ? 's' : ''} waiting for you to approve.` : ''} Questions seen on more forms are first.</span>${n ? `<button class="btn sm primary" data-act="suggestAll">Suggest all (${n})</button>` : ''}</div>` : '';
+}
+// Step 1: new wording for a question you already answered? Reuse that answer as a draft.
+function matchExisting(list) {
+  const done = S.answers.filter(x => x.confirmed && (x.answer || '').trim() && !x.sensitive && x.kind !== 'story');
+  let n = 0;
+  for (const a of list) {
+    const m = done.find(x => x !== a && (x.scope || 'both') !== (a.scope === 'UK' ? 'UAE' : a.scope === 'UAE' ? 'UK' : '-') && sameQuestion(a.question, x.question));
+    if (m) { a.answer = m.answer; a.confirmed = false; a.draft = { source: 'match', based_on: `your saved answer to “${m.question}”`, flags: [], at: now() }; a.updated_at = now(); n++; }
+  }
+  return n;
+}
+async function suggestAnswers(keys) {
+  const list = keys.map(k => S.answers.find(a => a.key === k)).filter(a => a && !(a.answer || '').trim() && !noDraft(a));
+  if (!list.length) { toast('Nothing to suggest here'); return; }
+  const matched = matchExisting(list);
+  if (matched) { await save(); renderProfile(); }
+  const rest = list.filter(a => !(a.answer || '').trim());
+  if (!rest.length) { toast(`${matched} answer${matched > 1 ? 's' : ''} matched questions you had already answered. Review and approve them.`); return; }
+  if (matched) toast(`${matched} matched questions you had already answered. Claude can draft the other ${rest.length}.`);
+  const qs = rest.map((a, i) => ({ id: 'q' + (i + 1), key: a.key, question: a.question, scope: a.scope }));
+  const letters = S.packs.filter(p => p.status === 'approved' && p.cl_md).slice(-4).map(p => { const j = job(p.job_id) || {}; return `### ${j.company || ''} · ${j.role || ''}\n${p.cl_md.slice(0, 3000)}`; }).join('\n\n');
+  const prompt = AI.chatPrompt(AI.answersPrompt({ questions: qs, docs: docs(), answers: S.answers, letters }));
+  chatHandoff({ eyebrow: 'Saved answers', title: `Suggest ${rest.length > 1 ? rest.length + ' answers' : 'an answer'} with Claude chat`, cloudTitle: `Suggest ${rest.length > 1 ? rest.length + ' answers' : 'an answer'}`, prompt,
+    onReply: async text => { applySuggestions(qs, text); await save(); renderProfile(); }, cloud: { kind: 'answers', ref: { qs: qs.map(({ id, key }) => ({ id, key })) }, title: `Suggested answers · ${rest.length}` } });
+}
+function applySuggestions(qs, text) {
+  const res = AI.extractJson(text); let n = 0, skipped = 0;
+  for (const r of res.answers || []) {
+    const q = qs.find(x => x.id === r.id); const a = q && S.answers.find(x => x.key === q.key);
+    if (!a || (a.answer || '').trim() || noDraft(a)) continue; // never overwrite something you wrote meanwhile
+    const ans = String(r.answer || '').trim();
+    if (!ans) { skipped++; continue; }
+    a.answer = ans; a.confirmed = false; a.updated_at = now();
+    a.draft = { source: 'claude', based_on: String(r.based_on || '').slice(0, 300), flags: (r.unsupported || []).map(String).filter(Boolean).slice(0, 6), at: now() };
+    n++;
+  }
+  toast(`${n} draft${n === 1 ? '' : 's'} added for you to review${skipped ? `; ${skipped} left empty because your documents don't cover them` : ''}.`);
+  return n;
+}
+
 /* Duplicate answers (LinkedIn, home address, location): keep one per market, store the rest in answer_merged so nothing is lost. */
 const MERGE_TOPICS = [
   ['linkedin', q => /linked\s*in/i.test(q), true],
@@ -789,6 +855,10 @@ const ACT = {
     if (s) $('src-del').onclick = async () => { S.sources = S.sources.filter(x => x.id !== id); await save(); closeModal(); renderAll(); };
   },
   editAnswer(key) { openAnswerForm(key); },
+  suggestAnswer(key) { suggestAnswers([key]); },
+  suggestAll() { suggestAnswers(suggestable().map(a => a.key)); },
+  async approveDraft(key) { const a = S.answers.find(x => x.key === key); if (!a) return; a.confirmed = true; a.approved_from_draft = a.draft; delete a.draft; a.updated_at = now(); await save(); renderProfile(); toast('Approved. Northstar can now use this answer on forms.'); },
+  async discardDraft(key) { const a = S.answers.find(x => x.key === key); if (!a || !a.draft) return; a.answer = ''; a.confirmed = false; delete a.draft; a.updated_at = now(); await save(); renderProfile(); },
   async restoreMerged(i) { const m = (S.answer_merged || [])[+i]; if (!m || m.alias) return; S.answer_merged.splice(+i, 1); if (!S.answers.some(x => x.key === m.item.key)) S.answers.push(m.item); await save(); renderProfile(); toast('Answer restored'); },
   reveal(key) { if (revealed[key]) delete revealed[key]; else revealed[key] = true; renderProfile(); },
   addBlock() { formModal({ eyebrow: 'Blocklist', title: 'Add an entry', fields: [{ id: 'kind', label: 'Type', type: 'select', options: ['company', 'role', 'url'], value: 'company' }, { id: 'value', label: 'Company, “Company Role”, or listing link' }, { id: 'reason', label: 'Reason (optional)', full: true }], onSave: async v => { if (!v.value.trim()) return false; S.blocklist.unshift({ id: uid('b'), kind: v.kind, value: v.value.trim(), reason: v.reason.trim(), created_at: now() }); await save(); renderProfile(); } }); },
@@ -993,6 +1063,7 @@ const CLOUD_COPY = {
   search: ['Takes 5–10 minutes. Results appear on Home under Search runs.'],
   pack: ['Takes a few minutes. The pack appears in Review.'],
   prep: ['Takes a few minutes. The notes appear on this interview.'],
+  answers: ['Takes a few minutes. The drafts appear under Needs your answer for you to approve.'],
 };
 function chatHandoff({ eyebrow = '', title, prompt, note = '', onReply, cloud, cloudTitle }) {
   const canCloud = cloud && ext.ready && ext.runner;
@@ -1033,7 +1104,7 @@ let closeModalKeep = false;
 /* ----- Northstar runner (cloud routine fired through the extension) ----- */
 const CLOUD_MAX = 65000;
 function cloudText(id, kind, prompt) {
-  const head = `NORTHSTAR CLOUD REQUEST\nrequest_id: ${id}\nkind: ${kind}\nsent_at: ${now()}\n\nDo the task below for Sere. Finish with the answer exactly in the form the task asks for.\n\n=====\n\n`;
+  const head = `NORTHSTAR CLOUD REQUEST\nrequest_id: ${id}\nkind: ${kind === 'answers' ? 'pack' : kind}\nsent_at: ${now()}\n\nDo the task below for Sere. Finish with the answer exactly in the form the task asks for.\n\n=====\n\n`;
   let p = prompt;
   // The runner keeps copies of the long reference files, so they are swapped for a pointer only when the request would be too long.
   const swaps = [['cover_letter_playbook', 'cover-letter-playbook.md'], ['search_profile', 'search-profile.md']];
@@ -1067,6 +1138,8 @@ async function applyCloudResult(req, text) {
     const j = job(req.ref.job_id); if (!j) throw Error('That role is no longer in Northstar');
     applyPackResult(j, AI.extractJson(text), 'northstar-runner'); j.stage = 'review'; j.updated_at = now();
     toast(`${j.company}: draft added. Answer the claims, read it, then approve.`);
+  } else if (req.kind === 'answers') {
+    applySuggestions(req.ref.qs || [], text);
   } else if (req.kind === 'prep') {
     const i = S.interviews.find(x => x.id === req.ref.interview_id); if (!i) throw Error('That interview is no longer in Northstar');
     const md = String(text).replace(/^\s*```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i, '$1').trim();
@@ -1248,7 +1321,7 @@ function openAnswerForm(key) {
   const a = key ? S.answers.find(x => x.key === key) : null;
   formModal({ eyebrow: a ? 'Edit answer' : 'New answer', title: a ? a.question : 'Add a reusable answer', copy: 'Only confirmed answers are used on forms and in packs. Never put passwords here.', fields: [{ id: 'question', label: 'Question as forms ask it', value: a?.question || '', full: true }, { id: 'answer', label: 'Answer', type: 'textarea', value: a?.answer || '' }, { id: 'scope', label: 'Used for', type: 'select', options: [['both', 'Both markets'], ['UK', 'UK only'], ['UAE', 'UAE only']], value: a?.scope || 'both' }, { id: 'confirmed', label: 'Confirmed by me', type: 'checkbox', value: a ? a.confirmed : true }, { id: 'sensitive', label: 'Sensitive (masked; demographic or private)', type: 'checkbox', value: a?.sensitive }],
     extra: a ? `<button class="btn danger" id="ans-del">Delete</button>` : '',
-    onSave: async v => { if (!v.question.trim()) return false; if (a && a.key !== answerKey(v.question, v.scope)) S.answers = S.answers.filter(x => x !== a); upsertAnswer({ question: v.question.trim(), answer: v.answer.trim(), kind: a?.kind === 'question' && v.answer.trim() ? 'form' : (a?.kind || 'form'), confirmed: v.confirmed, scope: v.scope, sensitive: v.sensitive }); await save(); renderProfile(); } });
+    onSave: async v => { if (!v.question.trim()) return false; if (a && a.key !== answerKey(v.question, v.scope)) S.answers = S.answers.filter(x => x !== a); if (a && v.confirmed) delete a.draft; upsertAnswer({ question: v.question.trim(), answer: v.answer.trim(), kind: a?.kind === 'question' && v.answer.trim() ? 'form' : (a?.kind || 'form'), confirmed: v.confirmed, scope: v.scope, sensitive: v.sensitive }); await save(); renderProfile(); } });
   if (a) $('ans-del').onclick = async () => { S.answers = S.answers.filter(x => x !== a); await save(); closeModal(); renderProfile(); };
 }
 function openInterviewForm(jid, iid) {
@@ -1382,7 +1455,8 @@ window.addEventListener('message', async e => {
     f.report = m.report; f.updated_at = now();
     f.status = m.report.blocked ? 'blocked' : (m.report.needs || []).length ? 'needs_you' : 'filled';
     // new questions from forms wait in Answers, unanswered
-    for (const n of m.report.needs || []) if (n.kind === 'unknown' && n.label && !S.answers.some(a => a.key === norm(n.label).slice(0, 80)) && !(S.answer_merged || []).some(m => m.key === norm(n.label).slice(0, 80))) S.answers.push({ key: norm(n.label).slice(0, 80), question: n.label, answer: '', kind: 'question', confirmed: false, scope: 'both', created_at: now() });
+    for (const n of m.report.needs || []) { const ex = n.kind === 'unknown' && n.label && S.answers.find(a => a.key === norm(n.label).slice(0, 80)); if (ex && !(ex.answer || '').trim()) ex.seen = (ex.seen || 1) + 1; }
+    for (const n of m.report.needs || []) if (n.kind === 'unknown' && n.label && !S.answers.some(a => a.key === norm(n.label).slice(0, 80)) && !(S.answer_merged || []).some(m => m.key === norm(n.label).slice(0, 80))) S.answers.push({ key: norm(n.label).slice(0, 80), question: n.label, answer: '', kind: 'question', confirmed: false, scope: 'both', seen: 1, created_at: now() });
     await save(); renderAll();
   }
   if (m.type === 'submit-unlocked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && !approvalFor(f.job_id)) { await recordApproval(f.job_id, 'page'); } }

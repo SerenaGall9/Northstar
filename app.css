@@ -275,3 +275,4 @@ details.ansrow>summary b{overflow-wrap:anywhere}
 .ansprev{color:var(--muted);font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 details.ansrow[open] .ansprev{display:none}
 .ansfull{padding:0 0 12px;font-size:14.5px;overflow-wrap:anywhere}
+.anstags{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0}
