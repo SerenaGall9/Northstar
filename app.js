@@ -341,7 +341,7 @@ function renderDiscovery() {
   rows.forEach(j => (byMarket[j.market || 'Other'] = byMarket[j.market || 'Other'] || []).push(j));
   const groups = Object.entries(byMarket).map(([m, list]) => group(`${m} roles to approve or dismiss`, list.length, collapsible(list.map(jobCard), 10, 'disc-' + m), true)).join('');
   $('discovery-list').innerHTML = (groups || `<div class="card empty">No roles waiting. Press Run search, or Add role with a job link.</div>`)
-    + (arch.length ? group('Screened out (fit 2)', arch.length, arch.map(j => `<div class="listrow"><span><b>${esc(j.company)}</b> · ${esc(j.role)}<br><span class="tiny">Fit ${j.fit} · ${esc(j.reason || lines(j.gaps)[0] || '')}</span></span><button class="btn sm" data-act="openJob" data-arg="${attr(j.id)}">Details</button></div>`).join(''), false) : '');
+    + (arch.length ? group('Screened out', arch.length, arch.map(j => `<div class="listrow"><span><b>${esc(j.company)}</b> · ${esc(j.role)}<br><span class="tiny">Fit ${j.fit} · ${esc(j.reason || lines(j.gaps)[0] || '')}</span></span><button class="btn sm" data-act="openJob" data-arg="${attr(j.id)}">Details</button></div>`).join(''), false) : '');
   $('rubric-meters').innerHTML = RUBRIC.map(([k, n, max]) => `<div class="meter"><span>${n}</span><div class="meterbar"><i style="width:${max / 35 * 100}%"></i></div><b>${max}</b></div>`).join('');
   $('ko-count').textContent = `Knock-outs counted, not saved: ${S.knockouts_counted || 0}. 85+ = fit 5 · 70 = 4 · 55 = 3 · 40 = 2.`;
   const on = S.sources.filter(s => s.enabled);
@@ -1181,7 +1181,15 @@ async function importSetup(text) {
   for (const a of d.answers || []) if (!S.answers.some(x => x.key === answerKey(a.question, a.scope))) upsertAnswer(a);
   for (const s of d.sources || []) if (!S.sources.some(x => norm(x.name) === norm(s.name) && x.market === s.market)) S.sources.push({ id: uid('s'), enabled: true, kind: 'board', ...s });
   for (const b of d.blocklist || []) if (b && b.value && !S.blocklist.some(x => x.kind === b.kind && norm(x.value) === norm(b.value))) S.blocklist.push({ id: uid('b'), created_at: now(), ...b });
-  await save(); closeModal(); renderAll(); toast(`Setup imported. Added ${Math.max(0, S.answers.length - before.a)} answers and ${S.blocklist.length - before.b} blocklist entries; nothing you already had was duplicated.`);
+  // Past roles from the old tracker: kept as Closed or Archived so they show in your history and searches skip them.
+  let past = 0;
+  for (const r of d.archive || []) {
+    if (!r || !r.company || !r.role) continue;
+    const key = norm(r.company + ' ' + r.role);
+    if (S.jobs.some(j => norm(j.company + ' ' + j.role) === key || (r.job_url && j.job_url === r.job_url))) continue;
+    S.jobs.push({ ...r, id: uid('j'), stage: r.stage === 'closed' ? 'closed' : 'archived', evidence: r.evidence || [], gaps: r.gaps || [] }); past++;
+  }
+  await save(); closeModal(); renderAll(); toast(`Setup imported. Added ${Math.max(0, S.answers.length - before.a)} answers, ${S.blocklist.length - before.b} blocklist entries and ${past} past roles; nothing you already had was duplicated.`);
 }
 async function importSync(text) {
   let d; try { d = JSON.parse(text); } catch { toast('That file is not a Northstar sync file'); return; }
