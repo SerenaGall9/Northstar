@@ -1172,14 +1172,16 @@ function pickFile(accept, fn) { const i = document.createElement('input'); i.typ
 async function importSetup(text) {
   let d; try { d = JSON.parse(text); } catch { toast('That file is not a Northstar setup file'); return; }
   if (!d.northstar_setup) { toast('That file is not a Northstar setup file'); return; }
-  S.docs = { ...S.docs, ...d.docs };
+  // A second import never overwrites documents you already have (you may have edited them here).
+  for (const [k, v] of Object.entries(d.docs || {})) if (v && !S.docs[k]) S.docs[k] = v;
+  const before = { a: S.answers.length, b: S.blocklist.length };
   S.profile = { ...S.profile, ...d.profile, contact: { ...(S.profile.contact || {}), ...(d.profile?.contact || {}) } };
   // Answers the setup file replaces are removed only if you have not edited them since.
   for (const r of d.remove_answers || []) S.answers = S.answers.filter(x => !(x.key === answerKey(r.question, r.scope) && x.answer === r.answer));
   for (const a of d.answers || []) if (!S.answers.some(x => x.key === answerKey(a.question, a.scope))) upsertAnswer(a);
   for (const s of d.sources || []) if (!S.sources.some(x => norm(x.name) === norm(s.name) && x.market === s.market)) S.sources.push({ id: uid('s'), enabled: true, kind: 'board', ...s });
-  for (const b of d.blocklist || []) S.blocklist.push({ id: uid('b'), created_at: now(), ...b });
-  await save(); closeModal(); renderAll(); toast('Setup imported: Master CV, playbook, rubric, answers and sources');
+  for (const b of d.blocklist || []) if (b && b.value && !S.blocklist.some(x => x.kind === b.kind && norm(x.value) === norm(b.value))) S.blocklist.push({ id: uid('b'), created_at: now(), ...b });
+  await save(); closeModal(); renderAll(); toast(`Setup imported. Added ${Math.max(0, S.answers.length - before.a)} answers and ${S.blocklist.length - before.b} blocklist entries; nothing you already had was duplicated.`);
 }
 async function importSync(text) {
   let d; try { d = JSON.parse(text); } catch { toast('That file is not a Northstar sync file'); return; }
