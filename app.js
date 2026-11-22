@@ -384,7 +384,7 @@ function runCard(r, open) {
   }).join('');
   return `<details class="more" ${open ? 'open' : ''} style="border-top:1px solid var(--line);padding:6px 0"><summary><span class="runhead" style="display:inline-flex;width:calc(100% - 20px)"><span>${esc((r.markets || []).join(' + '))} · ${fmtDate(r.started_at)}</span><span class="tag ${r.status === 'done' ? 'green' : r.status === 'running' ? 'blue' : 'amber'}">${label}</span></span></summary>
    <div class="tiny" style="margin:4px 0">${esc(r.summary || '')}</div>${fun}
-   ${(r.skipped || []).length ? `<div class="notice warn" style="margin-top:8px">Skipped sources: ${r.skipped.map(s => esc(s.source + (s.reason ? ' (' + s.reason + ')' : ''))).join(', ')}</div>` : ''}</details>`;
+   </details>`;
 }
 
 /* ---------- Discovery ---------- */
