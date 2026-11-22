@@ -119,7 +119,7 @@ function statusClass(s) {
 const badge = s => `<span class="tag badge ${statusClass(s)}">${esc(s)}</span>`;
 const fitCell = j => j.fit ? `<div class="fit">${j.fit}<div class="fitbar"><i style="width:${j.fit * 20}%"></i></div></div>` : '<span class="tiny">—</span>';
 
-function apiKey() { return local.get('api_key', ''); }
+function apiKey() { const k = local.get('api_key', ''); return /^sk-ant-oat/.test(k) ? '' : k; }
 function model() { return local.get('model', AI.DEFAULT_MODEL); }
 function docs() { return S.docs; }
 
@@ -708,7 +708,7 @@ const ACT = {
     $('mv-save').onclick = async () => { const body = editorValues().master; S.master_versions.unshift({ created_at: now(), note: $('mv-note').value.trim(), previous: S.docs.master_cv }); S.master_versions = S.master_versions.slice(0, 10); S.docs.master_cv = body; await save(); closeModal(); renderProfile(); toast('New Master CV version saved'); };
   },
   openSource(name) { const titles = { rubric: 'Fit score rubric', playbook: 'Cover letter playbook', search_profile: 'Search profile', workflow_rules: 'Workflow rules', master_cv: 'Master CV' }; docModal({ eyebrow: 'Read-only source', title: titles[name] || name, md: S.docs[name] || '*Not imported yet.*', filename: `${name}.pdf` }); },
-  async saveKey() { local.set('api_key', $('api-key').value.trim()); local.set('model', $('api-model').value); setStatus(); renderProfile(); toast('Assistant settings saved on this device'); },
+  async saveKey() { if (/^sk-ant-oat/.test($('api-key').value.trim())) { toast('That is a runner token, not an API key. Paste it in the extension menu under Cloud runner instead.'); return; } local.set('api_key', $('api-key').value.trim()); local.set('model', $('api-model').value); setStatus(); renderProfile(); toast('Assistant settings saved on this device'); },
   async clearKey() { local.set('api_key', ''); setStatus(); renderProfile(); },
   importSetup: () => pickFile('.json', importSetup),
   importSync: () => pickFile('.json', importSync),
