@@ -454,9 +454,38 @@ function renderReview() {
   const list = S.jobs.filter(j => ['drafting', 'review', 'application', 'submitted', 'interview'].includes(j.stage) && visible(j));
   const waiting = list.filter(j => j.stage === 'review' || j.stage === 'drafting');
   const approved = list.filter(j => approvedPack(j.id) && !['review', 'drafting'].includes(j.stage));
-  $('review-list').innerHTML = group('Waiting for your review', waiting.length, waiting.map(reviewCard).join('') || '<div class="empty">No packs waiting. Press Start application on a shortlisted role.</div>', true)
+  const fixable = fixAllRoles();
+  $('review-list').innerHTML = (fixable.length ? `<div class="notice" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px"><span>${fixable.length === 1 ? '1 role has' : fixable.length + ' roles have'} changes or answered claims waiting for a new version.</span><button class="btn primary" data-act="fixAll">Fix all</button></div>` : '') + group('Waiting for your review', waiting.length, waiting.map(reviewCard).join('') || '<div class="empty">No packs waiting. Press Start application on a shortlisted role.</div>', true)
     + (approved.length ? group('Approved versions', approved.length, approved.map(reviewCard).join(''), false) : '');
   document.querySelectorAll('details.rcard').forEach(d => d.addEventListener('toggle', () => { const k = d.dataset.job; reviewUI[k] = reviewUI[k] || {}; reviewUI[k].open = d.open; }));
+}
+function fixAllRoles() { return S.jobs.filter(j => j.stage === 'review' && visible(j) && needsFix(latestPack(j.id))); }
+function fixWhat(p) { const n = (p.change_requests || []).length, c = freshClaims(p).length; return [n ? `${n} change${n > 1 ? 's' : ''}` : '', c ? `${c} answered claim${c > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · '); }
+function openFixAll() {
+  const roles = fixAllRoles();
+  if (!roles.length) { toast('No role has changes or answered claims waiting'); return; }
+  if (!S.docs.master_cv) { toast('Import your setup file first (Career profile › Data & connections)'); return; }
+  const canCloud = ext.ready && ext.runner;
+  const list = roles.map(j => { const p = latestPack(j.id); return `<label class="checkline checkline-row" style="align-items:flex-start"><input type="checkbox" class="fx-pick" value="${attr(j.id)}" checked> <span><b>${esc(j.company)}</b> · ${esc(j.role)} · v${esc(p.version)}<br><span class="tiny">${esc(fixWhat(p))}</span></span></label>`; }).join('');
+  openModal(`<div class="eyebrow">Review</div><h2>Fix all</h2><p>Each ticked role gets a new version that uses your change requests and claim answers. Untick any you want to leave for now.</p>${list}
+   <p class="tiny">Nothing is approved for you: each new version waits in Review for you to read and approve.</p>
+   ${canCloud ? `<div class="actions"><button class="btn primary" id="fx-go" style="font-size:16px;padding:12px 22px">Send to Northstar runner</button></div><p class="tiny">Each role goes as its own request, so one failing doesn't stop the others. Each takes 5–10 minutes.</p>`
+      : `<div class="notice">Your Northstar runner isn't connected in this browser, so do these one at a time: press Build new version on each card and use the Claude chat steps.</div>`}
+   <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button></div>`, 'wide');
+  if (!canCloud) return;
+  $('fx-go').onclick = async () => {
+    const ids = [...document.querySelectorAll('.fx-pick:checked')].map(x => x.value);
+    if (!ids.length) { toast('Tick at least one role'); return; }
+    $('fx-go').disabled = true;
+    let sent = 0; const failed = [];
+    for (const id of ids) {
+      const j = job(id); $('fx-go').textContent = `Sending ${sent + failed.length + 1} of ${ids.length}…`;
+      try { await fireCloud({ kind: 'pack', ref: { job_id: id }, title: `New version · ${j.company}`, prompt: AI.chatPrompt(AI.packPrompt(packArgs(j))) }); sent++; }
+      catch (e) { failed.push(`${j.company}: ${e.message}`); }
+    }
+    closeModal(); renderAll();
+    toast(`Sent ${sent} of ${ids.length} to your Northstar runner.` + (failed.length ? ` Not sent: ${failed.join('; ')}. Use Build new version on those cards.` : ' New versions appear in Review as they finish.'));
+  };
 }
 function reviewCard(j) {
   const p = j.stage === 'review' || j.stage === 'drafting' ? latestPack(j.id) : approvedPack(j.id);
@@ -489,7 +518,7 @@ function packBody(j, p) {
   const canApprove = ui.read && !openClaims;
   const actions = approved ? `<div class="actions"><button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download Markdown</button><span class="tiny">Approved ${fmtDate(p.approved_at)} · version ${esc(p.hash)}</span></div>`
     : `<label class="checkline checkline-row"><input type="checkbox" data-act="tickRead" data-arg="${attr(j.id)}" ${ui.read ? 'checked' : ''}> I have read this exact CV and cover letter version in full</label>
-      <div class="actions"><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Edit it myself</button><button class="btn sm" data-act="requestChange" data-arg="${attr(p.id)}">${cr.length ? 'Add another change' : 'Request changes'}</button>${cr.length ? `<button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Build new version' : 'New version via Claude chat'}</button>` : ''}<button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download drafts</button><button class="btn sm primary" data-act="approvePack" data-arg="${attr(p.id)}" ${canApprove ? '' : 'disabled'}>Approve this version</button></div>
+      <div class="actions"><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Edit it myself</button><button class="btn sm" data-act="requestChange" data-arg="${attr(p.id)}">${cr.length ? 'Add another change' : 'Request changes'}</button>${needsFix(p) ? `<button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Build new version' : 'New version via Claude chat'}</button>` : ''}<button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download drafts</button><button class="btn sm primary" data-act="approvePack" data-arg="${attr(p.id)}" ${canApprove ? '' : 'disabled'}>Approve this version</button></div>
       <div class="tiny" style="margin-top:6px">${canApprove ? '' : 'To approve: answer or tick every claim, and tick that you read it. '}Approval covers version ${esc(p.hash)} only. It does not start form filling or submission.</div>`;
   const notesHtml = (p.notes || []).length ? `<details class="more" style="margin-top:12px"><summary>From your old tracker (${p.notes.length} sections: ${esc(p.notes.map(n => n.heading).join(', '))})</summary>${p.notes.map(n => `<details class="more"><summary>${esc(n.heading)}</summary><div class="paper">${mdToHtml(n.text)}</div></details>`).join('')}</details>` : '';
   return score + docsHtml + claimsHtml + notesHtml + crHtml + actions;
@@ -850,17 +879,18 @@ const ACT = {
   runSearch: () => runSearch(),
   startApplication: id => startApplication(id),
   draftPack: id => draftPackFor(id),
+  fixAll: () => openFixAll(),
   editDraft: id => editDraft(id),
   tickRead(id, el) { reviewUI[id] = { ...(reviewUI[id] || {}), read: el.checked, open: true }; renderReview(); },
   async claimSave(arg) {
     const [pid, i] = arg.split('|'); const p = S.packs.find(x => x.id === pid); const c = p.claims[+i];
     const text = $(`claim-${pid}-${i}`).value.trim();
     if (!text) { toast('Type the facts first, or tick that it does not apply'); return; }
-    c.state = 'confirmed'; c.answer = text;
+    c.state = 'confirmed'; c.answer = text; delete c.carried;
     upsertAnswer({ question: c.question, answer: text, kind: 'claim', confirmed: true, scope: 'both' });
     await save(); renderReview(); toast('Saved as a confirmed answer. Packs can now use it.');
   },
-  async claimNA(arg) { const [pid, i] = arg.split('|'); const p = S.packs.find(x => x.id === pid); p.claims[+i].state = 'na'; await save(); renderReview(); },
+  async claimNA(arg) { const [pid, i] = arg.split('|'); const p = S.packs.find(x => x.id === pid); p.claims[+i].state = 'na'; delete p.claims[+i].carried; await save(); renderReview(); },
   async claimReopen(arg) { const [pid, i] = arg.split('|'); const p = S.packs.find(x => x.id === pid); p.claims[+i].state = 'open'; await save(); renderReview(); },
   requestChange(pid) {
     formModal({ eyebrow: 'Request changes', title: 'What should change in the next version?', copy: 'Your words are passed on as written. A new version is built only when you press Build new version, and it needs a fresh approval.', fields: [{ id: 'note', label: 'Change request', type: 'textarea' }], onSave: async v => { if (!v.note.trim()) { toast('Write what should change'); return false; } const p = S.packs.find(x => x.id === pid); (p.change_requests = p.change_requests || []).push({ note: v.note.trim(), at: now() }); await save(); renderAll(); toast('Saved. Press Build new version, or Edit it myself.'); } });
@@ -1343,7 +1373,14 @@ async function startApplication(id) {
   renderAll(); ACT.goReview(id);
   chatPack(id);
 }
-function packArgs(j) { const prev = latestPack(j.id); return { job: j, docs: docs(), answers: S.answers, changeRequests: prev?.change_requests || [], previous: prev && (prev.change_requests || []).length ? prev : null }; }
+// Claims answered on this version (not carried over from an earlier one) that a new version has not used yet
+const freshClaims = p => (p?.claims || []).filter(c => c.state !== 'open' && !c.carried);
+const needsFix = p => !!p && p.status === 'draft' && ((p.change_requests || []).length > 0 || freshClaims(p).length > 0);
+function packArgs(j) {
+  const prev = latestPack(j.id), redo = needsFix(prev);
+  const claimNotes = redo ? freshClaims(prev).map(c => c.state === 'na' ? `${c.question}: does not apply` : `${c.question}: ${c.answer}`) : [];
+  return { job: j, docs: docs(), answers: S.answers, changeRequests: prev?.change_requests || [], previous: redo ? prev : null, claimNotes };
+}
 function applyPackResult(j, r, origin) {
   if (!r.sections || !r.cover_letter) throw Error('The reply is missing the CV sections or the cover letter. Copy the whole reply and try again.');
   addPack(j, { sections: r.sections, cl_md: r.cover_letter, claims: (r.claims || []).map(c => ({ question: c.question || String(c), why: c.why || '', state: 'open', answer: '' })), quality: r.quality, gaps: r.gaps, origin });
@@ -1374,7 +1411,7 @@ function addPack(j, { sections, cl_md, claims = [], quality = null, gaps = [], o
   const p = { id: uid('p'), job_id: j.id, version: (prev?.version || 0) + 1, status: 'draft', sections, cv_md, cl_md, claims, quality, gaps, change_requests: [], origin, created_at: now() };
   p.hash = hash(cv_md + '\n' + cl_md);
   // carry over claims already answered in the previous version
-  if (prev) p.claims.forEach(c => { const o = (prev.claims || []).find(x => norm(x.question) === norm(c.question) && x.state !== 'open'); if (o) { c.state = o.state; c.answer = o.answer; } });
+  if (prev) p.claims.forEach(c => { const o = (prev.claims || []).find(x => norm(x.question) === norm(c.question) && x.state !== 'open'); if (o) { c.state = o.state; c.answer = o.answer; c.carried = true; } });
   S.packs.push(p);
   reviewUI[j.id] = { open: true, read: false };
   return p;
