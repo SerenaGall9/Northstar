@@ -757,7 +757,7 @@ const ACT = {
   async draftPrep(iid) {
     const i = S.interviews.find(x => x.id === iid), j = job(i.job_id);
     const addPrep = async md => { i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md.trim(); await save(); renderInterviews(); toast('Prep notes added. Edit them any time.'); };
-    if (!apiKey()) { chatHandoff({ eyebrow: `${j.company} · ${i.stage || 'Interview'}`, title: 'Prep notes with Claude chat', prompt: AI.chatPrompt(AI.prepPrompt({ job: j, pack: approvedPack(j.id), interview: i, docs: docs() })), onReply: addPrep, cloud: { kind: 'prep', ref: { interview_id: iid }, title: `Prep notes · ${j.company}` } }); return; }
+    if (!apiKey()) { chatHandoff({ eyebrow: `${j.company} · ${i.stage || 'Interview'}`, title: 'Prep notes with Claude chat', cloudTitle: 'Make prep notes', prompt: AI.chatPrompt(AI.prepPrompt({ job: j, pack: approvedPack(j.id), interview: i, docs: docs() })), onReply: addPrep, cloud: { kind: 'prep', ref: { interview_id: iid }, title: `Prep notes · ${j.company}` } }); return; }
     busy('Drafting prep notes…');
     try { const md = await AI.draftPrep({ key: apiKey(), model: model(), job: j, pack: approvedPack(j.id), interview: i, docs: docs() }); i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md; await save(); renderInterviews(); toast('Prep notes added. Edit them any time.'); }
     catch (e) { toast(e.message); } finally { busy(); }
@@ -989,20 +989,37 @@ function applySearch(run, markets, res) {
 }
 
 /* ----- Copy prompt for Claude chat (no API key) ----- */
-function chatHandoff({ eyebrow = '', title, prompt, note = '', onReply, cloud }) {
+const CLOUD_COPY = {
+  search: ['Takes 5–10 minutes. Results appear on Home under Search runs.'],
+  pack: ['Takes a few minutes. The pack appears in Review.'],
+  prep: ['Takes a few minutes. The notes appear on this interview.'],
+};
+function chatHandoff({ eyebrow = '', title, prompt, note = '', onReply, cloud, cloudTitle }) {
   const canCloud = cloud && ext.ready && ext.runner;
-  openModal(`<div class="eyebrow">${esc(eyebrow)}</div><h2>${esc(title)}</h2>
-   ${canCloud ? `<div class="notice" style="margin-bottom:10px"><b>Run it in the cloud.</b> Your Northstar runner does this step on your Claude subscription and the result comes back here. No copy-paste.<div class="actions" style="margin-top:6px"><button class="btn sm primary" id="ch-cloud">Send to Northstar runner</button></div></div><div class="tiny" style="margin-bottom:6px">Or do it yourself in a Claude chat:</div>` : ''}
-   <ol class="steps"><li><b>Copy the prompt.</b> It holds what this step needs: your documents and rules, and the job.<div class="actions" style="margin-top:6px"><button class="btn sm primary" id="ch-copy">Copy prompt</button><a class="btn sm" href="https://claude.ai/new" target="_blank" rel="noopener noreferrer">Open Claude ↗</a><span class="tiny" id="ch-size">${Math.round(prompt.length / 1000)}k characters</span></div></li>
-   <li><b>Paste it into a new Claude chat</b> and send it.${note ? ` <span class="tiny">${esc(note)}</span>` : ''}</li>
-   <li><b>Copy Claude's whole reply</b> and paste it here.<textarea id="ch-reply" class="field" style="width:100%;min-height:150px;margin-top:6px" placeholder="Paste Claude's reply"></textarea></li></ol>
-   <details class="more"><summary>See the prompt</summary><textarea readonly class="field" id="ch-prompt" style="width:100%;min-height:160px;font:12.5px ui-monospace,monospace">${esc(prompt)}</textarea></details>
-   <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="ch-use">Use this reply</button></div>`, 'wide');
-  if (canCloud) $('ch-cloud').onclick = async () => { $('ch-cloud').disabled = true; try { await fireCloud({ ...cloud, prompt }); closeModal(); } catch (e) { toast(e.message); $('ch-cloud').disabled = false; } };
+  const chatSteps = `<ol class="steps"><li><b>Copy the prompt and open Claude.</b> The prompt holds what this step needs: your documents and rules, and the job.<div class="actions" style="margin-top:6px"><button class="btn sm ${canCloud ? '' : 'primary'}" id="ch-copy">Copy prompt &amp; open Claude ↗</button></div></li>
+   <li><b>Paste it into the new Claude chat</b> and send it.${note ? ` <span class="tiny">${esc(note)}</span>` : ''}</li>
+   <li><b>Copy Claude's whole reply</b> and paste it here.<div id="ch-paste" hidden><textarea id="ch-reply" class="field" style="width:100%;min-height:150px;margin-top:6px" placeholder="Paste Claude's reply"></textarea><div class="actions" style="margin-top:6px"><button class="btn primary" id="ch-use" disabled>Use this reply</button></div></div><div class="tiny" id="ch-wait">The paste box appears once you have copied the prompt. <a href="#" id="ch-skip">I already have a reply</a></div></li></ol>
+   <textarea readonly id="ch-prompt" style="position:absolute;left:-9999px;width:1px;height:1px">${esc(prompt)}</textarea>`;
+  openModal(canCloud
+    ? `${eyebrow && eyebrow !== (cloudTitle || eyebrow) ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ''}<h2>${esc(cloudTitle || eyebrow || title)}</h2>
+   <p>Your Northstar runner does this on your Claude subscription and sends the result back here. No copy-paste.</p>
+   <div class="actions"><button class="btn primary" id="ch-cloud" style="font-size:16px;padding:12px 22px">Send to Northstar runner</button></div>
+   <p class="tiny">${esc((CLOUD_COPY[cloud.kind] || ['Takes a few minutes. The result appears here by itself.'])[0])}</p>
+   <details class="more" id="ch-more"><summary>Do it in a Claude chat instead</summary>${chatSteps}</details>
+   <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button></div>`
+    : `<div class="eyebrow">${esc(eyebrow)}</div><h2>${esc(title)}</h2>${chatSteps}
+   <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button></div>`, 'wide');
+  if (canCloud) $('ch-cloud').onclick = async () => { $('ch-cloud').disabled = true; $('ch-cloud').textContent = 'Sending…'; try { await fireCloud({ ...cloud, prompt }); closeModal(); } catch (e) { toast(e.message); $('ch-cloud').disabled = false; $('ch-cloud').textContent = 'Send to Northstar runner'; } };
+  const showPaste = () => { $('ch-paste').hidden = false; $('ch-wait').hidden = true; $('ch-reply').focus(); };
+  $('ch-skip').onclick = e => { e.preventDefault(); showPaste(); };
+  $('ch-reply').oninput = () => { $('ch-use').disabled = !$('ch-reply').value.trim(); };
   $('ch-copy').onclick = async () => {
+    // copy while this page still has focus, then open Claude (still inside the click, so it is not blocked)
     try { await navigator.clipboard.writeText(prompt); }
-    catch { const t = $('ch-prompt'); t.closest('details').open = true; t.select(); document.execCommand('copy'); }
-    $('ch-copy').textContent = 'Copied ✓'; toast('Prompt copied. Paste it into a new Claude chat.');
+    catch { const t = $('ch-prompt'); t.select(); document.execCommand('copy'); }
+    window.open('https://claude.ai/new', '_blank', 'noopener');
+    $('ch-copy').textContent = 'Copied ✓ Claude opened in a new tab'; toast('Prompt copied. Paste it into the new Claude chat.');
+    showPaste();
   };
   $('ch-use').onclick = async () => {
     const text = $('ch-reply').value.trim();
@@ -1165,7 +1182,7 @@ function chatPack(id) {
   const j = job(id);
   if (!S.docs.master_cv) { toast('Import your setup file first (Career profile › Data & connections)'); return; }
   const isNew = !!latestPack(id);
-  chatHandoff({ eyebrow: `${j.company} · ${j.role}`, title: isNew ? 'New version with Claude chat' : 'Draft the pack with Claude chat', prompt: AI.chatPrompt(AI.packPrompt(packArgs(j))), cloud: { kind: 'pack', ref: { job_id: id }, title: `${isNew ? 'New version' : 'Pack'} · ${j.company}` },
+  chatHandoff({ eyebrow: `${j.company} · ${j.role}`, title: isNew ? 'New version with Claude chat' : 'Draft the pack with Claude chat', cloudTitle: isNew ? 'Make a new version' : 'Draft the pack', prompt: AI.chatPrompt(AI.packPrompt(packArgs(j))), cloud: { kind: 'pack', ref: { job_id: id }, title: `${isNew ? 'New version' : 'Pack'} · ${j.company}` },
     onReply: async text => { applyPackResult(j, AI.extractJson(text), 'claude-chat'); j.stage = 'review'; await save(); renderAll(); ACT.goReview(id); toast('Draft added. Answer the claims, read it, then approve.'); } });
 }
 async function draftPackFor(id) {
