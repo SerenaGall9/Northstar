@@ -390,7 +390,7 @@ function packBody(j, p) {
   const cv = p.cv_md, cl = p.cl_md;
   const score = q.overall != null ? `<div class="scoreline"><span>Editorial check</span><span>Relevance <b>${esc(q.relevance ?? '—')}</b></span><span>Evidence <b>${esc(q.evidence ?? '—')}</b></span><span>Natural <b>${esc(q.natural ?? '—')}</b></span><span>AI-sounding <b>${esc(q.ai_sounding ?? '—')}</b></span><span>Overall <b>${esc(q.overall)}/10</b></span></div>
     <details class="more"><summary>Details</summary><ul class="bullets">${(q.notes || []).map(n => `<li>${esc(n)}</li>`).join('') || '<li>No notes</li>'}</ul>${(p.gaps || []).length ? `<b class="tiny">Gaps</b><ul class="bullets gap">${p.gaps.map(g => `<li>${esc(g)}</li>`).join('')}</ul>` : ''}<p class="tiny">Editorial checks only. Not a hiring prediction or AI detection. AI-sounding: 10 means strongly.</p></details>`
-    : `<div class="scoreline"><span>Editorial check</span><span class="tiny">Not scored (written by you)</span></div>`;
+    : `<div class="scoreline"><span>Editorial check</span><span class="tiny">${p.origin === 'old tracker' ? 'Checked in your old tracker (see its Claim check below)' : 'Not scored (written by you)'}</span></div>`;
   const docsHtml = cv == null ? `<div class="notice" style="margin-top:12px">The CV and letter copies were deleted under the document lifecycle. Text answers and outcomes are kept.</div>` :
     `<div class="docs"><div class="docwrap"><div class="dochead"><span>CV ${approved ? '' : 'draft'}</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPack" data-arg="${attr(p.id)}|cv">⇩ PDF</button><button class="btn sm" data-act="viewPack" data-arg="${attr(p.id)}|cv">Open</button></span></div><div class="paper">${mdToHtml(cv)}</div></div>
      <div class="docwrap"><div class="dochead"><span>Cover letter · ${words(cl)} words</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPack" data-arg="${attr(p.id)}|cl">⇩ PDF</button><button class="btn sm" data-act="viewPack" data-arg="${attr(p.id)}|cl">Open</button></span></div><div class="paper letter">${mdToHtml(letterDoc(p))}</div></div></div>`;
@@ -401,7 +401,8 @@ function packBody(j, p) {
     : `<label class="checkline checkline-row"><input type="checkbox" data-act="tickRead" data-arg="${attr(j.id)}" ${ui.read ? 'checked' : ''}> I have read this exact CV and cover letter version in full</label>
       <div class="actions"><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Edit it myself</button><button class="btn sm" data-act="requestChange" data-arg="${attr(p.id)}">${cr.length ? 'Add another change' : 'Request changes'}</button>${cr.length ? `<button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Build new version' : 'New version via Claude chat'}</button>` : ''}<button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download drafts</button><button class="btn sm primary" data-act="approvePack" data-arg="${attr(p.id)}" ${canApprove ? '' : 'disabled'}>Approve this version</button></div>
       <div class="tiny" style="margin-top:6px">${canApprove ? '' : 'To approve: answer or tick every claim, and tick that you read it. '}Approval covers version ${esc(p.hash)} only. It does not start form filling or submission.</div>`;
-  return score + docsHtml + claimsHtml + crHtml + actions;
+  const notesHtml = (p.notes || []).length ? `<details class="more" style="margin-top:12px"><summary>From your old tracker (${p.notes.length} sections: ${esc(p.notes.map(n => n.heading).join(', '))})</summary>${p.notes.map(n => `<details class="more"><summary>${esc(n.heading)}</summary><div class="paper">${mdToHtml(n.text)}</div></details>`).join('')}</details>` : '';
+  return score + docsHtml + claimsHtml + notesHtml + crHtml + actions;
 }
 function claimBox(p, c, i) {
   const done = c.state !== 'open';
@@ -1189,7 +1190,21 @@ async function importSetup(text) {
     if (S.jobs.some(j => norm(j.company + ' ' + j.role) === key || (r.job_url && j.job_url === r.job_url))) continue;
     S.jobs.push({ ...r, id: uid('j'), stage: r.stage === 'closed' ? 'closed' : 'archived', evidence: r.evidence || [], gaps: r.gaps || [] }); past++;
   }
-  await save(); closeModal(); renderAll(); toast(`Setup imported. Added ${Math.max(0, S.answers.length - before.a)} answers, ${S.blocklist.length - before.b} blocklist entries and ${past} past roles; nothing you already had was duplicated.`);
+  // Packs from the old tracker: the CV and letter text are kept exactly as they were, linked to their role.
+  let packsIn = 0;
+  for (const it of d.old_packs || []) {
+    if (!it || !it.job || !it.pack || S.packs.some(p => p.old_app === it.app_id)) continue;
+    const key = norm(it.job.company + ' ' + it.job.role);
+    let j = S.jobs.find(x => x.old_id === it.app_id || norm(x.company + ' ' + x.role) === key || (it.job.job_url && x.job_url === it.job.job_url));
+    if (!j) { j = { ...it.job, id: uid('j') }; S.jobs.push(j); }
+    const prev = latestPack(j.id);
+    const pk = { id: uid('p'), job_id: j.id, version: (prev?.version || 0) + 1, change_requests: [], quality: null, gaps: [], created_at: j.updated_at || now(), ...it.pack, old_app: it.app_id };
+    pk.hash = hash(pk.cv_md + '\n' + pk.cl_md);
+    if (pk.status === 'approved') pk.approved_at = pk.created_at;
+    S.packs.push(pk); packsIn++;
+    if (it.interview && !S.interviews.some(i => i.job_id === j.id)) S.interviews.push({ id: uid('i'), created_at: now(), job_id: j.id, ...it.interview });
+  }
+  await save(); closeModal(); renderAll(); toast(`Setup imported. Added ${Math.max(0, S.answers.length - before.a)} answers, ${S.blocklist.length - before.b} blocklist entries, ${past} past roles and ${packsIn} packs; nothing you already had was duplicated.`);
 }
 async function importSync(text) {
   let d; try { d = JSON.parse(text); } catch { toast('That file is not a Northstar sync file'); return; }
