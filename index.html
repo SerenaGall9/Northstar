@@ -45,7 +45,7 @@
  <!-- HOME -->
  <section class="page on" id="page-home">
   <div class="hero"><div class="hero-copy"><div class="eyebrow">A considered search across two markets</div><h1>Make your next move with clarity.</h1><p>Find roles that fit, shape a truthful application, and prepare for the conversations ahead.</p><small>Search and reports run only when you press their buttons. Nothing is scheduled.</small></div>
-   <div class="hero-actions"><button class="btn lime" data-act="runSearch">⌕ Run search</button><button class="btn" data-act="openAddRole">＋ Add role</button></div></div>
+   <div class="hero-actions"><button class="btn lime" data-act="runSearch">⌕ Run search</button><button class="btn" data-act="openAddRole">＋ Add role</button><button class="btn" data-act="checkGmail">✉ Check Gmail</button></div></div>
   <div class="stats">
    <div class="card stat"><div class="statlabel">Shortlisted</div><div class="statnum" id="s-short">0</div><div class="statnote">in your pipeline</div></div>
    <div class="card stat"><div class="statlabel">Strong fits</div><div class="statnum" id="s-strong">0</div><div class="statnote">fit 4 or 5</div></div>
@@ -58,6 +58,7 @@
    <div class="rows" id="home-rows"></div>
   </div>
   <div class="grid2">
+   <div class="card panel" id="gmail-card" hidden><div class="panel-head"><div><h2>From Gmail</h2><small>Suggested status changes. Nothing changes until you accept.</small></div></div><div id="gmail-list"></div></div>
    <div class="card panel"><div class="panel-head"><h2>Next actions</h2><small>From your active work</small></div><div id="next-actions"></div></div>
    <div class="card panel"><div class="panel-head"><div><h2>Search runs</h2><small>Where roles dropped out, per market</small></div></div><div id="run-list"></div></div>
   </div>

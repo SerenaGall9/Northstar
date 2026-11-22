@@ -39,7 +39,7 @@ function blankState() {
     profile: { contact: {}, markets: ['UAE', 'UK'], talent_pool_box: false, current_employer: '' },
     docs: { master_cv: '', playbook: '', rubric: '', search_profile: '', workflow_rules: '' },
     master_versions: [],
-    sources: [], answers: [], blocklist: [], jobs: [], packs: [], fills: [], approvals: [], cloud: [], answer_merged: [],
+    sources: [], answers: [], blocklist: [], jobs: [], packs: [], fills: [], approvals: [], cloud: [], answer_merged: [], gmail: { last_checked: '', suggestions: [] },
     interviews: [], runs: [], reports: [], knockouts_counted: 0, last_cleanup: '',
   };
 }
@@ -163,6 +163,40 @@ function openStatusForm(id) {
     onSave: async v => { await setManualStatus(id, v.st, v.date, v.note.trim()); } });
 }
 document.addEventListener('change', e => { const t = e.target; if (t && t.dataset && t.dataset.statusjob) setManualStatus(t.dataset.statusjob, t.value, '', ''); });
+/* ----- Check Gmail: labels matching emails (in the runner or a Claude chat) and suggests status changes here ----- */
+const GMAIL_LABEL = 'Job Applications';
+const GMAIL_TO = { submitted: 'Applied', interview: 'Interview', rejected: 'Rejected' };
+const GMAIL_WORD = { submitted: 'Application received', interview: 'Interview invitation', rejected: 'Not moving forward' };
+function gmailRoles() { return S.jobs.filter(j => ['shortlisted', 'drafting', 'review', 'application', 'submitted', 'interview'].includes(j.stage)).map(j => ({ id: j.id, company: j.company, role: j.role, status: statusOf(j) })); }
+function checkGmail() {
+  const roles = gmailRoles(); if (!roles.length) { toast('No open applications to check for'); return; }
+  S.gmail ||= { last_checked: '', suggestions: [] };
+  const last = S.gmail.last_checked ? Date.parse(S.gmail.last_checked) || 0 : 0;
+  const sinceDays = last ? Math.min(60, Math.max(2, Math.ceil((Date.now() - last) / 864e5) + 2)) : 45;
+  const prompt = AI.chatPrompt(AI.gmailPrompt({ roles, sinceDays, label: GMAIL_LABEL }));
+  chatHandoff({ eyebrow: 'Gmail', title: 'Check Gmail with Claude chat', cloudTitle: 'Check Gmail', note: 'Use a Claude chat with the Gmail connector switched on.', prompt,
+    onReply: async text => { applyGmail(text, now()); await save(); renderAll(); }, cloud: { kind: 'gmail', ref: {}, title: 'Check Gmail' } });
+}
+function applyGmail(text, at) {
+  const res = AI.extractJson(text); S.gmail ||= { last_checked: '', suggestions: [] };
+  let n = 0, same = 0;
+  for (const e of res.emails || []) {
+    const j = job(e.job_id), to = GMAIL_TO[e.kind];
+    if (!j || !to || !e.thread_id || S.gmail.suggestions.some(x => x.thread_id === e.thread_id && x.kind === e.kind)) continue;
+    const s = { id: uid('g'), thread_id: String(e.thread_id).slice(0, 40), job_id: j.id, kind: e.kind, date: String(e.date || '').slice(0, 10), why: String(e.why || '').slice(0, 90), labelled: !!e.labelled, status: 'new', at: now() };
+    if (manualLabel(j) === to) { s.status = 'same'; same++; } else n++;
+    S.gmail.suggestions.unshift(s);
+  }
+  S.gmail.suggestions = S.gmail.suggestions.slice(0, 200);
+  S.gmail.last_checked = at || now();
+  toast(n ? `${n} suggested status change${n > 1 ? 's' : ''} from Gmail. See From Gmail on Home.` : `Gmail checked: nothing new${same ? ` (${same} email${same > 1 ? 's' : ''} matched a status you already have)` : ''}.`);
+}
+function renderGmail() {
+  const box = $('gmail-card'); if (!box) return;
+  const list = (S.gmail?.suggestions || []).filter(x => x.status === 'new' && job(x.job_id)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  box.hidden = !list.length;
+  $('gmail-list').innerHTML = list.map(x => { const j = job(x.job_id); return `<div class="listrow"><span style="min-width:0"><b>${esc(j.company)}</b> · ${esc(j.role)}<br><span class="tiny">${esc(GMAIL_WORD[x.kind])}${x.date ? ' · ' + esc(fmtDate(x.date, false)) : ''}${x.why ? ' · ' + esc(x.why) : ''} · now ${esc(statusOf(j))}</span></span><span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><a class="btn sm" href="https://mail.google.com/mail/u/0/#all/${encodeURIComponent(x.thread_id)}" target="_blank" rel="noopener noreferrer">Email ↗</a><button class="btn sm primary" data-act="gmailAccept" data-arg="${attr(x.id)}">Set ${esc(GMAIL_TO[x.kind])}</button><button class="btn sm" data-act="gmailDismiss" data-arg="${attr(x.id)}">Dismiss</button></span></div>`; }).join('');
+}
 function statusClass(s) {
   if (['Ready to review', 'Changes requested', 'Needs you', 'No draft yet', 'Fill queued'].includes(s)) return 'amber';
   if (['Interview', 'Filling', 'Drafting pack'].includes(s)) return 'blue';
@@ -345,6 +379,7 @@ function renderHome() {
     const label = { 'Ready to review': 'Review the pack for', 'Changes requested': 'Build a new version for', 'No draft yet': 'Write or draft the pack for', 'Shortlisted': 'Start an application for', 'Approved to fill': 'Fill the form for', 'Needs you': 'Finish what the form needs for', 'Filled · check it': 'Check the filled form for', 'Submit approved': 'Record the submission for', 'Interview': 'Prepare for the interview with', 'Fill queued': 'Send the fill request for' }[s] || 'Open';
     return `<div class="listrow"><span>${esc(label)} <b>${esc(j.company)}</b><br><span class="tiny">${esc(j.role)}</span></span>${badge(s)}</div>`;
   });
+  renderGmail();
   $('next-actions').innerHTML = na.length ? collapsible(na, 5, 'next') : '<div class="empty">Nothing waiting for you.</div>';
 
   // runs with per-market funnel
@@ -785,6 +820,9 @@ const ACT = {
   },
   openJob(id) { openJobModal(id); },
   changeStatus(id) { closeModal(); openStatusForm(id); },
+  checkGmail: () => checkGmail(),
+  async gmailAccept(gid) { const x = S.gmail.suggestions.find(s => s.id === gid); if (!x) return; x.status = 'accepted'; x.done_at = now(); await setManualStatus(x.job_id, GMAIL_TO[x.kind], x.date, 'From Gmail: ' + GMAIL_WORD[x.kind]); },
+  async gmailDismiss(gid) { const x = S.gmail.suggestions.find(s => s.id === gid); if (!x) return; x.status = 'dismissed'; x.done_at = now(); await save(); renderAll(); },
   async shortlist(id) { const j = job(id); j.stage = 'shortlisted'; j.shortlisted_at = now(); j.updated_at = now(); await save(); closeModal(); renderAll(); toast('Added to your shortlist. A pack is made only when you press Start application.'); },
   async dismiss(id) {
     const j = job(id);
@@ -1097,6 +1135,7 @@ const CLOUD_COPY = {
   search: ['Takes 5–10 minutes. Results appear on Home under Search runs.'],
   pack: ['Takes a few minutes. The pack appears in Review.'],
   prep: ['Takes a few minutes. The notes appear on this interview.'],
+  gmail: ['Takes a few minutes. Suggestions appear on Home under From Gmail.'],
   answers: ['Takes a few minutes. The drafts appear under Needs your answer for you to approve.'],
 };
 function chatHandoff({ eyebrow = '', title, prompt, note = '', onReply, cloud, cloudTitle }) {
@@ -1172,6 +1211,8 @@ async function applyCloudResult(req, text) {
     const j = job(req.ref.job_id); if (!j) throw Error('That role is no longer in Northstar');
     applyPackResult(j, AI.extractJson(text), 'northstar-runner'); j.stage = 'review'; j.updated_at = now();
     toast(`${j.company}: draft added. Answer the claims, read it, then approve.`);
+  } else if (req.kind === 'gmail') {
+    applyGmail(text, req.fired_at);
   } else if (req.kind === 'answers') {
     applySuggestions(req.ref.qs || [], text);
   } else if (req.kind === 'prep') {
