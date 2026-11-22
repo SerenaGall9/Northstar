@@ -467,6 +467,7 @@ function reviewCard(j) {
   if (j.stage === 'drafting') body = `<p class="tiny"><span class="spin"></span>The assistant is drafting this pack.</p>`;
   else if (!p) body = `<p class="tiny">No draft yet for this role.</p><div class="actions"><button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Draft with the assistant' : 'Copy prompt for Claude'}</button><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Write it myself</button></div>${apiKey() ? '' : '<p class="tiny">No API key: Northstar gives you a prompt to paste into a Claude chat, then you paste the reply back.</p>'}`;
   else body = packBody(j, p);
+  body = `<div class="actions" style="margin:0 0 10px"><a href="#" class="btn sm" data-act="openJob" data-arg="${attr(j.id)}">Role details</a>${j.job_url ? `<a class="btn sm" href="${attr(safeUrl(j.job_url))}" target="_blank" rel="noopener noreferrer">Listing ↗</a>` : ''}</div>` + body;
   return `<details class="rcard" data-job="${attr(j.id)}" ${ui.open ? 'open' : ''}>${head}<div class="rbody">${body}</div></details>`;
 }
 function packBody(j, p) {
@@ -821,6 +822,7 @@ const ACT = {
   openJob(id) { openJobModal(id); },
   changeStatus(id) { closeModal(); openStatusForm(id); },
   checkGmail: () => checkGmail(),
+  pickSearchMarket(m) { local.set('search_market', m); closeModal(); runSearch(); },
   async gmailAccept(gid) { const x = S.gmail.suggestions.find(s => s.id === gid); if (!x) return; x.status = 'accepted'; x.done_at = now(); await setManualStatus(x.job_id, GMAIL_TO[x.kind], x.date, 'From Gmail: ' + GMAIL_WORD[x.kind]); },
   async gmailDismiss(gid) { const x = S.gmail.suggestions.find(s => s.id === gid); if (!x) return; x.status = 'dismissed'; x.done_at = now(); await save(); renderAll(); },
   async shortlist(id) { const j = job(id); j.stage = 'shortlisted'; j.shortlisted_at = now(); j.updated_at = now(); await save(); closeModal(); renderAll(); toast('Added to your shortlist. A pack is made only when you press Start application.'); },
@@ -1085,14 +1087,28 @@ function openJobModal(id) {
 }
 
 /* ----- Run search ----- */
+function searchMarkets() {
+  const all = S.profile.markets || ['UAE', 'UK'];
+  const pick = local.get('search_market', '') || (activeMarket === 'all' ? 'Both' : activeMarket);
+  return pick === 'Both' ? all : all.includes(pick) ? [pick] : all;
+}
+function marketPicker(markets) {
+  const cur = markets.length > 1 ? 'Both' : markets[0];
+  return `<div class="seg" role="group" aria-label="Markets to search" style="margin:0 0 12px">${['UK', 'UAE', 'Both'].map(m => `<button class="btn sm ${m === cur ? 'primary' : ''}" data-act="pickSearchMarket" data-arg="${m}" aria-pressed="${m === cur}">${m}</button>`).join(' ')}</div>`;
+}
+// Only what is new since the last finished search of these markets (saves Claude usage).
+function searchSince(markets) {
+  const r = S.runs.find(r => r.kind === 'search' && ['done', 'complete', 'completed'].includes(r.status) && markets.every(m => (r.markets || []).includes(m)));
+  return r ? (r.started_at || '').slice(0, 10) : '';
+}
 async function runSearch() {
-  const markets = activeMarket === 'all' ? (S.profile.markets || ['UAE', 'UK']) : [activeMarket];
+  const markets = searchMarkets();
   if (S.runs.some(r => r.kind === 'search' && r.status === 'running')) { toast('A search is already running'); return; }
   const sources = S.sources.filter(s => s.enabled && (markets.includes(s.market) || s.market === 'Both'));
   if (!sources.length) { S.runs.unshift({ id: uid('r'), kind: 'search', markets, status: 'blocked', started_at: now(), funnel: {}, skipped: [], summary: 'No search sources are switched on for ' + markets.join(' and ') + '.' }); await save(); renderAll(); toast('No search sources are switched on. Choose them in Search settings.'); return; }
-  const args = { markets, sources, known: S.jobs.map(j => `${j.company} — ${j.role} — ${j.location || ''}`), blocked: S.blocklist.map(b => b.value), docs: docs() };
+  const args = { markets, since: searchSince(markets), sources, known: S.jobs.map(j => `${j.company} — ${j.role} — ${j.location || ''}`), blocked: S.blocklist.map(b => b.value), docs: docs() };
   if (!apiKey()) {
-    chatHandoff({ eyebrow: `Run search · ${markets.join(' + ')}`, title: 'Search with Claude chat', prompt: AI.chatPrompt(AI.searchPrompt(args)), note: 'Use a Claude chat with web search switched on. The search takes a few minutes there.', cloud: { kind: 'search', ref: { markets }, title: 'Run search · ' + markets.join(' + ') },
+    chatHandoff({ eyebrow: `Run search · ${markets.length > 1 ? 'Both' : markets[0]}`, top: marketPicker(markets), title: 'Search with Claude chat', prompt: AI.chatPrompt(AI.searchPrompt(args)), note: 'Use a Claude chat with web search switched on. The search takes a few minutes there.', cloud: { kind: 'search', ref: { markets }, title: 'Run search · ' + markets.join(' + ') },
       onReply: async text => { const res = AI.extractJson(text); const run = { id: uid('r'), kind: 'search', markets, status: 'running', started_at: now(), funnel: {}, skipped: [], via: 'chat' }; S.runs.unshift(run); applySearch(run, markets, res); await save(); renderAll(); go('home'); } });
     return;
   }
@@ -1138,20 +1154,20 @@ const CLOUD_COPY = {
   gmail: ['Takes a few minutes. Suggestions appear on Home under From Gmail.'],
   answers: ['Takes a few minutes. The drafts appear under Needs your answer for you to approve.'],
 };
-function chatHandoff({ eyebrow = '', title, prompt, note = '', onReply, cloud, cloudTitle }) {
+function chatHandoff({ eyebrow = '', title, prompt, note = '', onReply, cloud, cloudTitle, top = '' }) {
   const canCloud = cloud && ext.ready && ext.runner;
   const chatSteps = `<ol class="steps"><li><b>Copy the prompt and open Claude.</b> The prompt holds what this step needs: your documents and rules, and the job.<div class="actions" style="margin-top:6px"><button class="btn sm ${canCloud ? '' : 'primary'}" id="ch-copy">Copy prompt &amp; open Claude ↗</button></div></li>
    <li><b>Paste it into the new Claude chat</b> and send it.${note ? ` <span class="tiny">${esc(note)}</span>` : ''}</li>
    <li><b>Copy Claude's whole reply</b> and paste it here.<div id="ch-paste" hidden><textarea id="ch-reply" class="field" style="width:100%;min-height:150px;margin-top:6px" placeholder="Paste Claude's reply"></textarea><div class="actions" style="margin-top:6px"><button class="btn primary" id="ch-use" disabled>Use this reply</button></div></div><div class="tiny" id="ch-wait">The paste box appears once you have copied the prompt. <a href="#" id="ch-skip">I already have a reply</a></div></li></ol>
    <textarea readonly id="ch-prompt" style="position:absolute;left:-9999px;width:1px;height:1px">${esc(prompt)}</textarea>`;
   openModal(canCloud
-    ? `${eyebrow && eyebrow !== (cloudTitle || eyebrow) ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ''}<h2>${esc(cloudTitle || eyebrow || title)}</h2>
+    ? `${eyebrow && eyebrow !== (cloudTitle || eyebrow) ? `<div class="eyebrow">${esc(eyebrow)}</div>` : ''}<h2>${esc(cloudTitle || eyebrow || title)}</h2>${top}
    <p>Your Northstar runner does this on your Claude subscription and sends the result back here. No copy-paste.</p>
    <div class="actions"><button class="btn primary" id="ch-cloud" style="font-size:16px;padding:12px 22px">Send to Northstar runner</button></div>
    <p class="tiny">${esc((CLOUD_COPY[cloud.kind] || ['Takes a few minutes. The result appears here by itself.'])[0])}</p>
    <details class="more" id="ch-more"><summary>Do it in a Claude chat instead</summary>${chatSteps}</details>
    <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button></div>`
-    : `<div class="eyebrow">${esc(eyebrow)}</div><h2>${esc(title)}</h2>${chatSteps}
+    : `<div class="eyebrow">${esc(eyebrow)}</div><h2>${esc(title)}</h2>${top}${chatSteps}
    <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button></div>`, 'wide');
   if (canCloud) $('ch-cloud').onclick = async () => { $('ch-cloud').disabled = true; $('ch-cloud').textContent = 'Sending…'; try { await fireCloud({ ...cloud, prompt }); closeModal(); } catch (e) { toast(e.message); $('ch-cloud').disabled = false; $('ch-cloud').textContent = 'Send to Northstar runner'; } };
   const showPaste = () => { $('ch-paste').hidden = false; $('ch-wait').hidden = true; $('ch-reply').focus(); };

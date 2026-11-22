@@ -64,7 +64,7 @@ export async function readJobAd({ key, model, ...a }) {
 }
 
 /** Run search: one pass over the enabled sources for the chosen markets. */
-export function searchPrompt({ markets, sources, known, blocked, docs }) {
+export function searchPrompt({ markets, since, sources, known, blocked, docs }) {
   const tools = [
     { type: 'web_search_20260209', name: 'web_search', max_uses: 12 * markets.length },
     { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 10 * markets.length },
@@ -72,6 +72,8 @@ export function searchPrompt({ markets, sources, known, blocked, docs }) {
   const srcList = sources.map(s => `- ${s.name} (${s.market})${s.url ? ' ' + s.url : ''}${s.notes ? ' · ' + s.notes : ''}`).join('\n');
   const user = `Run one job search now for these markets: ${markets.join(', ')}. One batch per market.\n\n` +
     `Search only these sources:\n${srcList}\n\nNever sign in. If a source needs a login, shows a CAPTCHA or blocks you, stop using it and list it in skipped_sources with the reason.\n\n` +
+    `Only new ads: ${since ? `look only at listings posted since ${since} (my last search of these markets)` : 'look only at listings posted in the last 7 days'}; count older ones as duplicates and do not open them.\n` +
+    `Save effort: score each listing from its title, company, location and snippet first. Open the full ad only for roles that pass that quick check (right kind of role, seniority and market); count the rest as knock-outs without opening them.\n\n` +
     `Skip roles already tracked or blocked (do not open their full ads):\nTracked: ${known.slice(0, 300).join(' | ') || 'none'}\nBlocked: ${blocked.join(' | ') || 'none'}\n\n` +
     `For each market count every listing you looked at and where it dropped out. Score the rest with the rubric. Return roles with fit 2 or more (fit 1 is counted only).\n\n` +
     `Return only JSON in a \`\`\`json block:\n{"markets": {"<market>": {"looked_at": 0, "duplicates": 0, "already_tracked": 0, "blocked": 0, "knockout": 0, "knockout_reasons": {"reason": 0}, "roles": [{"company":"","role":"","location":"","industry":"","salary":"","deadline":"","job_url":"","apply_url":"","source":"","also_seen_on":[],"years_asked":"","certs_asked":"","jd_summary":"", ${RUBRIC_JSON}, "adjacent_title": false, "low_confidence": false, "evidence":[], "gaps":[]}]}}, "skipped_sources": [{"source":"","reason":""}]}`;
