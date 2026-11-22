@@ -267,3 +267,11 @@ details.rcard>summary::-webkit-details-marker{display:none}
 @media print{.side,.top,.mobile,.toast,.busy{display:none!important}.app{display:block}}
 ol.steps{padding-left:22px;margin:8px 0 12px;display:grid;gap:12px;font-size:15px}
 ol.steps li::marker{font-weight:800;color:var(--green)}
+details.ansrow{border-bottom:1px solid var(--line)}
+details.ansrow:last-child{border:0}
+details.ansrow>summary{list-style:none;cursor:pointer;padding:10px 0;display:grid;grid-template-columns:minmax(0,1fr);gap:2px;font-size:15px}
+details.ansrow>summary::-webkit-details-marker{display:none}
+details.ansrow>summary b{overflow-wrap:anywhere}
+.ansprev{color:var(--muted);font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+details.ansrow[open] .ansprev{display:none}
+.ansfull{padding:0 0 12px;font-size:14.5px;overflow-wrap:anywhere}

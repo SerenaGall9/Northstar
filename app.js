@@ -39,7 +39,7 @@ function blankState() {
     profile: { contact: {}, markets: ['UAE', 'UK'], talent_pool_box: false, current_employer: '' },
     docs: { master_cv: '', playbook: '', rubric: '', search_profile: '', workflow_rules: '' },
     master_versions: [],
-    sources: [], answers: [], blocklist: [], jobs: [], packs: [], fills: [], approvals: [], cloud: [],
+    sources: [], answers: [], blocklist: [], jobs: [], packs: [], fills: [], approvals: [], cloud: [], answer_merged: [],
     interviews: [], runs: [], reports: [], knockouts_counted: 0, last_cleanup: '',
   };
 }
@@ -517,14 +517,11 @@ function renderProfile() {
       ${['UAE', 'UK', 'Both'].map(m => { const r = mk(m); return r.length ? group(m === 'Both' ? 'Both markets' : m, r.length, r.map(srcRow).join(''), true) : ''; }).join('') || '<div class="empty">No sources yet.</div>'}
      </div></div>`;
   } else if (profileTab === 'answers') {
-    const groups = [
-      ['Form answers', a => !a.sensitive && !['claim', 'question'].includes(a.kind)],
-      ['Confirmed claims', a => a.kind === 'claim' && !a.sensitive],
-      ['Sensitive (masked)', a => a.sensitive],
-      ['Questions from forms, waiting for you', a => a.kind === 'question' && !a.sensitive],
-    ];
-    v.innerHTML = `<div class="card panel"><div class="panel-head"><div><h2>Saved answers</h2><small>Only confirmed answers are used on forms and in packs. Never store passwords here.</small></div><button class="btn primary sm" data-act="editAnswer">＋ Add answer</button></div>
-     ${groups.map(([t, f], gi) => { const rs = S.answers.filter(f); return rs.length ? group(t, rs.length, rs.map(answerRow).join(''), gi === 0) : ''; }).join('')}</div>`;
+    v.innerHTML = `<div class="card panel"><div class="panel-head"><div><h2>Saved answers <span class="tag gray">${S.answers.length}</span></h2><small>Only confirmed answers are used on forms and in packs. Tap an answer to see it in full or edit it.</small></div><button class="btn primary sm" data-act="editAnswer">＋ Add answer</button></div>
+     <input class="field search" id="ans-q" placeholder="Search questions and answers" value="${attr(ansQuery)}" style="width:100%;margin-bottom:12px">
+     <div id="ans-groups">${answerGroupsHtml()}</div></div>`;
+    $('ans-groups').addEventListener('toggle', e => { const t = e.target.dataset?.ansgroup; if (t && !ansQuery) { if (e.target.open) ansOpen.add(t); else ansOpen.delete(t); } }, true);
+    $('ans-q').oninput = e => { ansQuery = e.target.value; $('ans-groups').innerHTML = answerGroupsHtml(); };
   } else if (profileTab === 'cv') {
     v.innerHTML = `<div class="card panel"><div class="panel-head"><div><h2>Master CV</h2><small>The source of truth for every pack. Only Summary, Highlights and Competencies are tailored per job.</small></div><div class="actions" style="margin:0"><button class="btn sm" data-act="pdfMaster">⇩ PDF</button><button class="btn sm" data-act="newMaster">New Master CV version</button></div></div>
      <p class="tiny">${S.master_versions.length ? `Current version from ${fmtDate(S.master_versions[0].created_at)}${S.master_versions[0].note ? ' (' + esc(S.master_versions[0].note) + ')' : ''}. Approved packs never change.` : 'From your setup file.'}</p>
@@ -569,10 +566,77 @@ function renderProfile() {
 function srcRow(s) {
   return `<div class="srcrow"><input type="checkbox" data-act="toggleSource" data-arg="${attr(s.id)}" ${s.enabled ? 'checked' : ''} aria-label="Use ${attr(s.name)}"><div><b>${esc(s.name)}</b>${s.notes ? `<div class="tiny">${esc(s.notes)}</div>` : ''}${s.url ? `<div class="tiny">${esc(s.url)}</div>` : ''}</div><span class="c-mkt tiny">${esc(s.market)}</span><span class="c-kind tag gray">${esc(s.kind || 'board')}</span><button class="btn sm" data-act="editSource" data-arg="${attr(s.id)}">Edit</button></div>`;
 }
+const ANSWER_GROUPS = [
+  ['Needs your answer', a => !(a.answer || '').trim()],
+  ['Stories', a => a.kind === 'story'],
+  ['Confirmed claims', a => a.kind === 'claim'],
+  ['Pay', a => /salary|day rate|pay\b|compensation|remuneration|bonus/i.test(a.question)],
+  ['Diversity', a => /gender|sex you were|age band|ethnic|disabilit|orientation|religion|caring|socio-economic|armed forces|pronoun/i.test(a.question)],
+  ['Basics', a => /\blocation\b|where .*based|right to work|authori[sz]ed to work|visa|sponsor|notice|nationality|citizenship|address|first name|last name|full name|linked\s*in|start date|tax resident|phone|e-?mail/i.test(a.question)],
+  ['Work pattern', a => /on-?site|office|hybrid|remote|working pattern|relocat|travel|days a week|shift/i.test(a.question)],
+  ['Experience and certs', a => /experience|years|qualification|education|degree|certif|languages|employer|job title|driving|licen[cs]e|clearance|vetting/i.test(a.question)],
+  ['Personal "why" answers', a => /^(why|what|how|which|tell us|describe)\b|introduction|about yourself/i.test(a.question) && !/hear about/i.test(a.question)],
+  ['Other', () => true],
+];
+let ansQuery = '';
+const ansOpen = new Set(['Needs your answer']);
+function answerGroupOf(a) { return ANSWER_GROUPS.find(([, f]) => f(a))[0]; }
+function answerGroupsHtml() {
+  const q = norm(ansQuery);
+  const hit = a => !q || norm(a.question).includes(q) || (!a.sensitive && norm(a.answer || '').includes(q));
+  const by = {}; for (const a of S.answers) if (hit(a)) (by[answerGroupOf(a)] ||= []).push(a);
+  const body = ANSWER_GROUPS.map(([t]) => { const rs = by[t]; if (!rs) return ''; return `<details class="group" data-ansgroup="${attr(t)}" ${q || ansOpen.has(t) ? 'open' : ''}><summary>${esc(t)} <span class="count">${rs.length}</span></summary><div class="gbody">${rs.map(answerRow).join('')}</div></details>`; }).join('');
+  const merged = (S.answer_merged || []).map((m, i) => ({ ...m, i })).filter(m => !m.alias);
+  const mergedHtml = !q && merged.length ? `<details class="group"><summary>Merged duplicates <span class="count">${merged.length}</span></summary><div class="gbody"><p class="tiny">These repeated another answer, so Northstar keeps only one. They are stored here so nothing is lost; Restore puts one back.</p>${merged.map(m => `<div class="listrow"><span style="min-width:0"><b>${esc(m.item.question)}</b><br><span class="tiny">${m.item.sensitive ? '••••••' : esc((m.item.answer || '(empty)').slice(0, 120))} · merged into “${esc(m.into_question || '')}”</span></span><button class="btn sm" data-act="restoreMerged" data-arg="${m.i}">Restore</button></div>`).join('')}</div></details>` : '';
+  return (body || `<div class="empty">${q ? 'No answers match your search.' : 'No saved answers yet.'}</div>`) + mergedHtml;
+}
 function answerRow(a) {
   const shown = revealed[a.key];
-  const val = a.sensitive ? (shown ? esc(a.answer || '(empty)') : '••••••') : (a.answer ? esc(a.answer.length > 240 ? a.answer.slice(0, 240) + '…' : a.answer) : '<i>No answer yet</i>');
-  return `<div class="listrow"><span style="min-width:0"><b>${esc(a.question)}</b><br><span class="tiny">${val} · ${esc(a.scope || 'both')} · ${a.confirmed ? 'confirmed' : '<b style="color:var(--amber)">not confirmed</b>'}</span></span><span class="actions" style="margin:0;flex-wrap:nowrap">${a.sensitive ? `<button class="btn sm" data-act="reveal" data-arg="${attr(a.key)}">${shown ? 'Hide' : 'Show'}</button>` : ''}<button class="btn sm" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button></span></div>`;
+  const full = a.answer || '';
+  const first = full.split('\n').find(l => l.trim()) || '';
+  const preview = !full.trim() ? '<i>No answer yet</i>' : a.sensitive && !shown ? '••••••' : esc(first);
+  const fullHtml = !full.trim() ? '<i>No answer yet</i>' : a.sensitive && !shown ? '••••••' : esc(full).replace(/\n/g, '<br>');
+  return `<details class="ansrow"><summary><b>${esc(a.question)}</b><span class="ansprev">${preview}</span></summary><div class="ansfull"><div>${fullHtml}</div><div class="tiny" style="margin-top:6px">${esc(a.scope === 'both' || !a.scope ? 'Both markets' : a.scope + ' only')} · ${a.confirmed ? 'confirmed' : '<b style="color:var(--amber)">not confirmed</b>'}</div><div class="actions" style="margin:8px 0 0">${a.sensitive && full.trim() ? `<button class="btn sm" data-act="reveal" data-arg="${attr(a.key)}">${shown ? 'Hide' : 'Show'}</button>` : ''}<button class="btn sm primary" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button></div></div></details>`;
+}
+/* Duplicate answers (LinkedIn, home address, location): keep one per market, store the rest in answer_merged so nothing is lost. */
+const MERGE_TOPICS = [
+  ['linkedin', q => /linked\s*in/i.test(q), true],
+  ['address', q => /address/i.test(q) && !/e-?mail|web|ip address/i.test(q), true],
+  ['location', q => /\blocation\b|where (are you|do you live|.*based)/i.test(q) && !/willing|relocat|prefer/i.test(q)],
+];
+function answerQuality(a) { const t = (a.answer || '').trim(); return (t ? 1000 : 0) + (a.confirmed ? 500 : 0) + (/^[A-Z0-9]/.test(t) ? 100 : 0) + (t.includes(',') ? 50 : 0) + Math.min(t.length, 200) / 10 + (Date.parse(a.updated_at || a.created_at || 0) || 0) / 1e13; }
+function mergeDuplicateAnswers() {
+  S.answer_merged ||= []; let n = 0;
+  for (const [topic, test, anyMarket] of MERGE_TOPICS) {
+    const list = S.answers.filter(a => a.kind !== 'story' && a.kind !== 'claim' && test(a.question || ''));
+    if (list.length < 2) continue;
+    if (anyMarket) {
+      // one LinkedIn link and one home address serve every market
+      const sorted = [...list].sort((x, y) => answerQuality(y) - answerQuality(x)), keep = sorted[0];
+      for (const a of sorted.slice(1)) { if (a.sensitive) keep.sensitive = true; S.answer_merged.push({ key: a.key, topic, into: keep.key, into_question: keep.question, at: now(), item: a }); S.answers = S.answers.filter(x => x !== a); n++; }
+      if ((keep.scope || 'both') !== 'both' && list.some(a => (a.scope || 'both') === 'both')) {
+        const old = keep.key; keep.scope = 'both'; keep.key = answerKey(keep.question, 'both');
+        if (S.answers.some(x => x !== keep && x.key === keep.key)) { keep.key = old; keep.scope = list[0].scope; }
+        else S.answer_merged.push({ key: old, topic, into: keep.key, alias: true, at: now() });
+      }
+      continue;
+    }
+    const scopes = new Set(list.map(a => a.scope || 'both'));
+    const drop = [];
+    // a "both markets" entry is redundant when there is one for the UK and one for the UAE
+    if (scopes.has('UK') && scopes.has('UAE')) for (const a of list) if ((a.scope || 'both') === 'both') drop.push([a, list.filter(x => x.scope === 'UK' || x.scope === 'UAE').sort((x, y) => answerQuality(y) - answerQuality(x))[0]]);
+    for (const sc of scopes) {
+      const same = list.filter(a => (a.scope || 'both') === sc && !drop.some(([d]) => d === a)).sort((x, y) => answerQuality(y) - answerQuality(x));
+      for (const a of same.slice(1)) drop.push([a, same[0]]);
+    }
+    for (const [a, keep] of drop) {
+      if (!keep || a === keep) continue;
+      if (a.sensitive) keep.sensitive = true;
+      S.answer_merged.push({ key: a.key, topic, into: keep.key, into_question: keep.question, at: now(), item: a });
+      S.answers = S.answers.filter(x => x !== a); n++;
+    }
+  }
+  return n;
 }
 
 /* =========================================================
@@ -725,6 +789,7 @@ const ACT = {
     if (s) $('src-del').onclick = async () => { S.sources = S.sources.filter(x => x.id !== id); await save(); closeModal(); renderAll(); };
   },
   editAnswer(key) { openAnswerForm(key); },
+  async restoreMerged(i) { const m = (S.answer_merged || [])[+i]; if (!m || m.alias) return; S.answer_merged.splice(+i, 1); if (!S.answers.some(x => x.key === m.item.key)) S.answers.push(m.item); await save(); renderProfile(); toast('Answer restored'); },
   reveal(key) { if (revealed[key]) delete revealed[key]; else revealed[key] = true; renderProfile(); },
   addBlock() { formModal({ eyebrow: 'Blocklist', title: 'Add an entry', fields: [{ id: 'kind', label: 'Type', type: 'select', options: ['company', 'role', 'url'], value: 'company' }, { id: 'value', label: 'Company, “Company Role”, or listing link' }, { id: 'reason', label: 'Reason (optional)', full: true }], onSave: async v => { if (!v.value.trim()) return false; S.blocklist.unshift({ id: uid('b'), kind: v.kind, value: v.value.trim(), reason: v.reason.trim(), created_at: now() }); await save(); renderProfile(); } }); },
   async unblock(id) { S.blocklist = S.blocklist.filter(x => x.id !== id); await save(); renderProfile(); },
@@ -1236,7 +1301,9 @@ async function importSetup(text) {
   S.profile = { ...S.profile, ...d.profile, contact: { ...(S.profile.contact || {}), ...(d.profile?.contact || {}) } };
   // Answers the setup file replaces are removed only if you have not edited them since.
   for (const r of d.remove_answers || []) S.answers = S.answers.filter(x => !(x.key === answerKey(r.question, r.scope) && x.answer === r.answer));
-  for (const a of d.answers || []) if (!S.answers.some(x => x.key === answerKey(a.question, a.scope))) upsertAnswer(a);
+  const mergedKeys = new Set((S.answer_merged || []).map(m => m.key));
+  for (const a of d.answers || []) { const k = answerKey(a.question, a.scope); if (!S.answers.some(x => x.key === k) && !mergedKeys.has(k)) upsertAnswer(a); }
+  mergeDuplicateAnswers();
   for (const s of d.sources || []) if (!S.sources.some(x => norm(x.name) === norm(s.name) && x.market === s.market)) S.sources.push({ id: uid('s'), enabled: true, kind: 'board', ...s });
   for (const b of d.blocklist || []) if (b && b.value && !S.blocklist.some(x => x.kind === b.kind && norm(x.value) === norm(b.value))) S.blocklist.push({ id: uid('b'), created_at: now(), ...b });
   // Past roles from the old tracker: kept as Closed or Archived so they show in your history and searches skip them.
@@ -1298,7 +1365,7 @@ window.addEventListener('message', async e => {
     f.report = m.report; f.updated_at = now();
     f.status = m.report.blocked ? 'blocked' : (m.report.needs || []).length ? 'needs_you' : 'filled';
     // new questions from forms wait in Answers, unanswered
-    for (const n of m.report.needs || []) if (n.kind === 'unknown' && n.label && !S.answers.some(a => a.key === norm(n.label).slice(0, 80))) S.answers.push({ key: norm(n.label).slice(0, 80), question: n.label, answer: '', kind: 'question', confirmed: false, scope: 'both', created_at: now() });
+    for (const n of m.report.needs || []) if (n.kind === 'unknown' && n.label && !S.answers.some(a => a.key === norm(n.label).slice(0, 80)) && !(S.answer_merged || []).some(m => m.key === norm(n.label).slice(0, 80))) S.answers.push({ key: norm(n.label).slice(0, 80), question: n.label, answer: '', kind: 'question', confirmed: false, scope: 'both', created_at: now() });
     await save(); renderAll();
   }
   if (m.type === 'submit-unlocked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && !approvalFor(f.job_id)) { await recordApproval(f.job_id, 'page'); } }
@@ -1358,7 +1425,8 @@ async function start() {
   applyTheme();
   const stored = await dbGet('state');
   if (stored) adopt(stored); else { S = blankState(); baseAt = null; await save(); }
-  backup('opened Northstar');
+  await backup('opened Northstar');
+  if ((S.answers || []).length && mergeDuplicateAnswers()) { await backup('before merging duplicate answers', true); await save(); }
   if (runCleanup(false)) await save();
   renderAll();
   const p = local.get('page', 'home'); if (p !== 'home' && PAGE_NAMES[p]) go(p);
