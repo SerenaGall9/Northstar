@@ -669,10 +669,12 @@ function answerRow(a) {
   const waiting = !full.trim(), isDraft = a.draft && !a.confirmed;
   const tags = `${(a.seen || 1) > 1 ? `<span class="tag blue">Seen on ${a.seen} forms</span>` : ''}${isDraft ? '<span class="tag amber">Draft to review</span>' : ''}`;
   const draftHtml = isDraft ? `<div class="notice" style="margin-top:8px"><b>Suggested by ${a.draft.source === 'match' ? 'Northstar' : 'Claude'}.</b> Based on: ${esc(a.draft.based_on || 'not stated')}.${(a.draft.flags || []).length ? `<div style="margin-top:4px;color:var(--amber)"><b>Check before approving:</b> ${a.draft.flags.map(esc).join('; ')}</div>` : ''}<div class="tiny" style="margin-top:4px">Not used on forms or in packs until you approve it.</div></div>` : '';
-  const suggestHtml = waiting ? (noDraft(a) ? '<div class="tiny" style="margin-top:6px">Pay, diversity and private details are never suggested. Please fill this one in yourself.</div>' : '') : '';
+  const ns = waiting && a.no_suggestion;
+  const suggestHtml = waiting ? (noDraft(a) ? '<div class="tiny" style="margin-top:6px">Pay, diversity and private details are never suggested. Please fill this one in yourself.</div>'
+    : ns ? `<div class="notice warn" style="margin-top:8px"><b>Claude didn't suggest an answer, on purpose.</b> ${esc(ns.reason || "Your documents don't cover this question.")}${ns.flags.length ? `<div class="tiny" style="margin-top:4px">Not backed up by your documents: ${ns.flags.map(esc).join('; ')}</div>` : ''}<div class="tiny" style="margin-top:4px">Please answer it yourself with Edit.</div></div>` : '') : '';
   const btns = isDraft
     ? `<button class="btn sm primary" data-act="approveDraft" data-arg="${attr(a.key)}">Approve</button><button class="btn sm" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button><button class="btn sm" data-act="discardDraft" data-arg="${attr(a.key)}">Discard draft</button>`
-    : `${waiting && !noDraft(a) ? `<button class="btn sm primary" data-act="suggestAnswer" data-arg="${attr(a.key)}">Suggest answer</button>` : ''}${a.sensitive && full.trim() ? `<button class="btn sm" data-act="reveal" data-arg="${attr(a.key)}">${shown ? 'Hide' : 'Show'}</button>` : ''}<button class="btn sm ${waiting && !noDraft(a) ? '' : 'primary'}" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button>`;
+    : `${waiting && !noDraft(a) ? `<button class="btn sm ${ns ? '' : 'primary'}" data-act="suggestAnswer" data-arg="${attr(a.key)}">${ns ? 'Try again' : 'Suggest answer'}</button>` : ''}${a.sensitive && full.trim() ? `<button class="btn sm" data-act="reveal" data-arg="${attr(a.key)}">${shown ? 'Hide' : 'Show'}</button>` : ''}<button class="btn sm ${waiting && !noDraft(a) && !ns ? '' : 'primary'}" data-act="editAnswer" data-arg="${attr(a.key)}">Edit</button>`;
   return `<details class="ansrow"><summary><b>${esc(a.question)}</b>${tags ? `<span class="anstags">${tags}</span>` : ''}<span class="ansprev">${preview}</span></summary><div class="ansfull"><div>${fullHtml}</div>${draftHtml}${suggestHtml}<div class="tiny" style="margin-top:6px">${esc(a.scope === 'both' || !a.scope ? 'Both markets' : a.scope + ' only')} · ${a.confirmed ? 'confirmed' : '<b style="color:var(--amber)">not confirmed</b>'}</div><div class="actions" style="margin:8px 0 0">${btns}</div></div></details>`;
 }
 /* ----- Suggested answers: drafts only, never used until approved ----- */
@@ -687,9 +689,9 @@ function sameQuestion(a, b) {
   let inter = 0; for (const w of x) if (y.has(w)) inter++;
   return inter === x.size && inter / y.size >= 0.5;
 }
-function suggestable() { return S.answers.filter(a => !(a.answer || '').trim() && !noDraft(a)); }
+function suggestable() { return S.answers.filter(a => !(a.answer || '').trim() && !noDraft(a) && !a.no_suggestion); }
 function suggestBar(rs) {
-  const n = rs.filter(a => !(a.answer || '').trim() && !noDraft(a)).length;
+  const n = rs.filter(a => !(a.answer || '').trim() && !noDraft(a) && !a.no_suggestion).length;
   const d = rs.filter(a => a.draft && !a.confirmed).length;
   return n || d ? `<div class="notice" style="margin:0 0 8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="flex:1;min-width:200px">${n ? `${n} question${n > 1 ? 's' : ''} can get a suggested answer from your CV, stories and saved answers.` : ''}${d ? ` ${d} draft${d > 1 ? 's' : ''} waiting for you to approve.` : ''} Questions seen on more forms are first.</span>${n ? `<button class="btn sm primary" data-act="suggestAll">Suggest all (${n})</button>` : ''}</div>` : '';
 }
@@ -723,7 +725,8 @@ function applySuggestions(qs, text) {
     const q = qs.find(x => x.id === r.id); const a = q && S.answers.find(x => x.key === q.key);
     if (!a || (a.answer || '').trim() || noDraft(a)) continue; // never overwrite something you wrote meanwhile
     const ans = String(r.answer || '').trim();
-    if (!ans) { skipped++; continue; }
+    if (!ans) { skipped++; a.no_suggestion = { reason: String(r.skip_reason || '').slice(0, 500), flags: (r.unsupported || []).map(String).filter(Boolean).slice(0, 4), at: now() }; continue; }
+    delete a.no_suggestion;
     a.answer = ans; a.confirmed = false; a.updated_at = now();
     a.draft = { source: 'claude', based_on: String(r.based_on || '').slice(0, 300), flags: (r.unsupported || []).map(String).filter(Boolean).slice(0, 6), at: now() };
     n++;
@@ -1412,7 +1415,7 @@ function openAnswerForm(key) {
   const a = key ? S.answers.find(x => x.key === key) : null;
   formModal({ eyebrow: a ? 'Edit answer' : 'New answer', title: a ? a.question : 'Add a reusable answer', copy: 'Only confirmed answers are used on forms and in packs. Never put passwords here.', fields: [{ id: 'question', label: 'Question as forms ask it', value: a?.question || '', full: true }, { id: 'answer', label: 'Answer', type: 'textarea', value: a?.answer || '' }, { id: 'scope', label: 'Used for', type: 'select', options: [['both', 'Both markets'], ['UK', 'UK only'], ['UAE', 'UAE only']], value: a?.scope || 'both' }, { id: 'confirmed', label: 'Confirmed by me', type: 'checkbox', value: a ? a.confirmed : true }, { id: 'sensitive', label: 'Sensitive (masked; demographic or private)', type: 'checkbox', value: a?.sensitive }],
     extra: a ? `<button class="btn danger" id="ans-del">Delete</button>` : '',
-    onSave: async v => { if (!v.question.trim()) return false; if (a && a.key !== answerKey(v.question, v.scope)) S.answers = S.answers.filter(x => x !== a); if (a && v.confirmed) delete a.draft; upsertAnswer({ question: v.question.trim(), answer: v.answer.trim(), kind: a?.kind === 'question' && v.answer.trim() ? 'form' : (a?.kind || 'form'), confirmed: v.confirmed, scope: v.scope, sensitive: v.sensitive }); await save(); renderProfile(); } });
+    onSave: async v => { if (!v.question.trim()) return false; if (a && a.key !== answerKey(v.question, v.scope)) S.answers = S.answers.filter(x => x !== a); if (a && v.confirmed) delete a.draft; if (a && v.answer.trim()) delete a.no_suggestion; upsertAnswer({ question: v.question.trim(), answer: v.answer.trim(), kind: a?.kind === 'question' && v.answer.trim() ? 'form' : (a?.kind || 'form'), confirmed: v.confirmed, scope: v.scope, sensitive: v.sensitive }); await save(); renderProfile(); } });
   if (a) $('ans-del').onclick = async () => { S.answers = S.answers.filter(x => x !== a); await save(); closeModal(); renderProfile(); };
 }
 function openInterviewForm(jid, iid) {
