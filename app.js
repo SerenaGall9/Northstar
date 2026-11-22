@@ -1198,13 +1198,10 @@ const CLOUD_MAX = 65000;
 function cloudText(id, kind, prompt) {
   const head = `NORTHSTAR CLOUD REQUEST\nrequest_id: ${id}\nkind: ${kind === 'answers' ? 'pack' : kind}\nsent_at: ${now()}\n\nDo the task below for Sere. Finish with the answer exactly in the form the task asks for.\n\n=====\n\n`;
   let p = prompt;
-  // The runner keeps copies of the long reference files, so they are swapped for a pointer only when the request would be too long.
-  const swaps = [['cover_letter_playbook', 'cover-letter-playbook.md'], ['search_profile', 'search-profile.md']];
-  for (const [tag, file] of swaps) {
-    if ((head + p).length <= CLOUD_MAX) break;
-    p = p.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`), `<${tag}>Too long to send with this request: read /mnt/project-files/${file} instead.</${tag}>`);
-  }
-  if ((head + p).length > CLOUD_MAX) throw Error('This request is too long for the cloud runner. Use Copy prompt instead.');
+  // Too long for one runner request: leave out the search profile first (a pack or prep does not need it);
+  // the CV, playbook and answers are never cut. If it still does not fit, stop here instead of sending a request the runner cannot do.
+  if ((head + p).length > CLOUD_MAX && kind !== 'search') p = p.replace(/<search_profile>[\s\S]*?<\/search_profile>/, '<search_profile>Left out of this request to keep it short. Use the master CV, playbook and confirmed answers.</search_profile>');
+  if ((head + p).length > CLOUD_MAX) throw Error('This request is too long for the cloud runner. Use "Do it in a Claude chat instead".');
   return head + p;
 }
 async function fireCloud({ kind, ref, title, prompt }) {
