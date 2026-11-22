@@ -39,7 +39,7 @@ function blankState() {
     profile: { contact: {}, markets: ['UAE', 'UK'], talent_pool_box: false, current_employer: '' },
     docs: { master_cv: '', playbook: '', rubric: '', search_profile: '', workflow_rules: '' },
     master_versions: [],
-    sources: [], answers: [], blocklist: [], jobs: [], packs: [], fills: [], approvals: [],
+    sources: [], answers: [], blocklist: [], jobs: [], packs: [], fills: [], approvals: [], cloud: [],
     interviews: [], runs: [], reports: [], knockouts_counted: 0, last_cleanup: '',
   };
 }
@@ -295,6 +295,7 @@ function renderHome() {
 
   // runs with per-market funnel
   const runs = S.runs.filter(r => r.kind === 'search').slice(0, 20);
+  renderCloud();
   $('run-list').innerHTML = runs.length ? runs.map((r, i) => runCard(r, i === 0)).join('') : '<div class="empty">No search has been run yet. Press Run search when you want one.</div>';
 }
 function nextButton(j, s) {
@@ -375,7 +376,7 @@ function reviewCard(j) {
   const head = `<summary><span class="rsum-title">${esc(j.role)} <span>· ${esc(j.company)}${p ? ' · v' + p.version : ''}</span></span><span class="c-fit">${fitCell(j)}</span>${badge(p && p.status === 'approved' ? 'Approved' : s)}</summary>`;
   let body;
   if (j.stage === 'drafting') body = `<p class="tiny"><span class="spin"></span>The assistant is drafting this pack.</p>`;
-  else if (!p) body = `<p class="tiny">No draft yet for this role.</p><div class="actions"><button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}" ${apiKey() ? '' : 'disabled'}>Draft with the assistant</button><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Write it myself</button></div>${apiKey() ? '' : '<p class="tiny">Add your assistant key in Career profile › Data & connections to draft automatically.</p>'}`;
+  else if (!p) body = `<p class="tiny">No draft yet for this role.</p><div class="actions"><button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Draft with the assistant' : 'Copy prompt for Claude'}</button><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Write it myself</button></div>${apiKey() ? '' : '<p class="tiny">No API key: Northstar gives you a prompt to paste into a Claude chat, then you paste the reply back.</p>'}`;
   else body = packBody(j, p);
   return `<details class="rcard" data-job="${attr(j.id)}" ${ui.open ? 'open' : ''}>${head}<div class="rbody">${body}</div></details>`;
 }
@@ -398,7 +399,7 @@ function packBody(j, p) {
   const canApprove = ui.read && !openClaims;
   const actions = approved ? `<div class="actions"><button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download Markdown</button><span class="tiny">Approved ${fmtDate(p.approved_at)} · version ${esc(p.hash)}</span></div>`
     : `<label class="checkline checkline-row"><input type="checkbox" data-act="tickRead" data-arg="${attr(j.id)}" ${ui.read ? 'checked' : ''}> I have read this exact CV and cover letter version in full</label>
-      <div class="actions"><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Edit it myself</button><button class="btn sm" data-act="requestChange" data-arg="${attr(p.id)}">${cr.length ? 'Add another change' : 'Request changes'}</button>${cr.length ? `<button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}" ${apiKey() ? '' : 'disabled'}>Build new version</button>` : ''}<button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download drafts</button><button class="btn sm primary" data-act="approvePack" data-arg="${attr(p.id)}" ${canApprove ? '' : 'disabled'}>Approve this version</button></div>
+      <div class="actions"><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Edit it myself</button><button class="btn sm" data-act="requestChange" data-arg="${attr(p.id)}">${cr.length ? 'Add another change' : 'Request changes'}</button>${cr.length ? `<button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Build new version' : 'New version via Claude chat'}</button>` : ''}<button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download drafts</button><button class="btn sm primary" data-act="approvePack" data-arg="${attr(p.id)}" ${canApprove ? '' : 'disabled'}>Approve this version</button></div>
       <div class="tiny" style="margin-top:6px">${canApprove ? '' : 'To approve: answer or tick every claim, and tick that you read it. '}Approval covers version ${esc(p.hash)} only. It does not start form filling or submission.</div>`;
   return score + docsHtml + claimsHtml + crHtml + actions;
 }
@@ -459,7 +460,7 @@ function interviewCard(i) {
   const d = i.when_local ? new Date(i.when_local) : null, ok = d && !isNaN(d);
   return `<article class="card interview"><div class="interview-head"><div class="datebox">${ok ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }).toUpperCase() : 'DATE TBC'}</div><div style="flex:1;min-width:0"><h3>${esc(j.role || '')}</h3><p>${esc(j.company || '')} · ${esc(i.stage || 'Interview')}${i.outcome ? ' · <b>' + esc(i.outcome) + '</b>' : ''}</p><p>${ok ? esc(d.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + ' ' + esc(i.tz || '') : 'Time to confirm'}${i.link ? ` · <a href="${attr(safeUrl(i.link))}" target="_blank" rel="noopener noreferrer">Meeting link ↗</a>` : ''}</p></div></div>
    <details class="more" style="margin-top:10px"><summary>Interview prep ${i.prep_md ? '' : '(empty)'}</summary>${i.prep_md ? `<div class="docwrap" style="margin-top:8px"><div class="dochead"><span>Prep document</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPrep" data-arg="${attr(i.id)}">⇩ PDF</button><button class="btn sm" data-act="viewPrep" data-arg="${attr(i.id)}">Open</button></span></div><div class="paper">${mdToHtml(prepDoc(i))}</div></div>` : '<p class="tiny">No notes yet.</p>'}</details>
-   <div class="actions"><button class="btn sm" data-act="openInterview" data-arg="|${attr(i.id)}">Edit</button><button class="btn sm" data-act="draftPrep" data-arg="${attr(i.id)}" ${apiKey() ? '' : 'disabled'}>Draft prep notes</button><button class="btn sm" data-act="recordOutcome" data-arg="${attr(i.id)}">Record outcome</button></div></article>`;
+   <div class="actions"><button class="btn sm" data-act="openInterview" data-arg="|${attr(i.id)}">Edit</button><button class="btn sm" data-act="draftPrep" data-arg="${attr(i.id)}">${apiKey() ? 'Draft prep notes' : 'Prep notes via Claude chat'}</button><button class="btn sm" data-act="recordOutcome" data-arg="${attr(i.id)}">Record outcome</button></div></article>`;
 }
 function prepDoc(i) {
   const j = job(i.job_id) || {};
@@ -520,12 +521,21 @@ function renderProfile() {
       <div class="formgrid"><div class="formfield full"><label>Claude API key (stored only on this device, never exported)</label><input id="api-key" type="password" autocomplete="off" value="${attr(key)}" placeholder="sk-ant-…"></div>
       <div class="formfield"><label>Model</label><select id="api-model">${[['claude-opus-5-5', 'Claude Opus 5.5 (default)'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5']].map(([v, l]) => `<option value="${v}" ${model() === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
       <div class="actions"><button class="btn primary sm" data-act="saveKey">Save</button>${key ? '<button class="btn sm danger" data-act="clearKey">Remove key</button>' : ''}</div>
-      <p class="tiny">Each button sends one request with only what that action needs (for example your Master CV and one job ad). Nothing runs in the background.</p></div>
+      <p class="tiny">Each button sends one request with only what that action needs (for example your Master CV and one job ad). Nothing runs in the background.</p><p class="tiny"><b>No key?</b> Every assistant button still works through your Claude subscription: it gives you a prompt to paste into a Claude chat, and you paste the reply back.</p></div>
+     <div class="card panel"><div class="panel-head"><div><h2>Cloud runner</h2><small>Your Northstar routine does assistant steps on your Claude subscription</small></div><span class="tag ${ext.runner && ghRepo() && ghToken() ? 'green' : 'amber'}">${ext.runner && ghRepo() && ghToken() ? 'Ready' : `${[ext.runner, ghRepo(), ghToken()].filter(Boolean).length} of 3 done`}</span></div>
+      <ul class="checks" style="list-style:none;padding:0;margin:0 0 10px">
+       <li>${ext.runner ? '✅' : '⬜'} <b>Starting runs</b>: ${ext.runner ? 'on, set in the extension menu' : ext.ready ? 'paste the routine\'s Fire URL and token in the <b>extension menu</b> (puzzle icon › Northstar Autofill)' : 'install the Chrome extension first'}</li>
+       <li>${ghRepo() ? '✅' : '⬜'} <b>Results repository</b>: ${ghRepo() ? esc(ghRepo()) : 'type it below'}</li>
+       <li>${ghToken() ? '✅' : '⬜'} <b>Read-only token</b>: ${ghToken() ? 'saved on this device' : 'paste it below'}</li></ul>
+      <div class="formgrid"><div class="formfield"><label>Results repository (owner/name)</label><input id="gh-repo" value="${attr(ghRepo())}" placeholder="e.g. SerenaGall9/northstar-results"></div>
+      <div class="formfield"><label>Read-only GitHub token (this device only, never exported)</label><input id="gh-token" type="password" autocomplete="off" value="${ghToken() ? '••••••••' : ''}" placeholder="github_pat_…"></div></div>
+      <div class="actions"><button class="btn primary sm" data-act="saveRunner">Save</button>${ghToken() ? '<button class="btn sm danger" data-act="clearRunner">Remove token</button>' : ''}</div>
+      ${local.get('gh_problem', '') ? `<div class="notice warn">${esc(local.get('gh_problem', ''))}</div>` : ''}</div>
      <div class="card panel"><div class="panel-head"><div><h2>Chrome extension</h2><small>Fills forms from your approved pack. Never submits without your approval.</small></div><span class="tag ${ext.ready ? 'green' : 'amber'}">${ext.ready ? 'Connected' : 'Not connected'}</span></div>
       <ul class="bullets"><li>Install: chrome://extensions → Developer mode → Load unpacked → choose the <b>extension</b> folder.</li><li>If this page is not on localhost, open the extension's menu on this page and press <b>Trust this Northstar page</b>.</li><li>Phones: form filling is not available, everything else works.</li></ul></div>
      <div class="card panel"><div class="panel-head"><div><h2>Your data</h2><small>Saved in this browser on this device only</small></div></div>
       <div class="actions"><button class="btn sm" data-act="importSetup">Import setup file</button><button class="btn sm" data-act="exportSync">⇩ Export sync file</button><button class="btn sm" data-act="importSync">Import sync file</button><button class="btn sm" data-act="exportCsv">⇩ Roles as CSV</button></div>
-      <p class="tiny">To use the same tracker on your phone and computer, export a sync file on one and import it on the other. Sync files contain personal data: keep them private. The API key is never included.</p>
+      <p class="tiny">To use the same tracker on your phone and computer, export a sync file on one and import it on the other. Sync files contain personal data: keep them private. API keys and tokens are never included.</p>
       <p class="tiny">Last saved ${fmtDate(S.updated_at)} · ${S.jobs.length} roles · ${S.packs.length} pack versions · ${S.answers.length} answers</p></div>
      <div class="card panel"><div class="panel-head"><h2>Appearance</h2></div><div class="seg" style="display:inline-flex">${['auto', 'light', 'dark'].map(t => `<button data-act="theme" data-arg="${t}" class="${(local.get('theme', 'auto')) === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
       <div class="divider"></div><button class="btn sm danger" data-act="resetAll">Erase everything on this device</button></div></div>`;
@@ -544,6 +554,25 @@ function answerRow(a) {
    Actions
    ========================================================= */
 const ACT = {
+  cloudCheck() { pollCloud(true); },
+  saveRunner() {
+    if (!saveRunnerField('gh-repo') || !saveRunnerField('gh-token')) return;
+    renderProfile();
+    if (!ghRepo()) { toast('Token saved. Now type the repository name, for example SerenaGall9/northstar-results, and press Save.'); return; }
+    if (!ghToken()) { toast('Repository saved. Now paste the read-only token and press Save.'); return; }
+    toast('Saved on this device: ' + ghRepo() + ' with its read-only token'); pollCloud();
+  },
+  clearRunner() { local.set('gh_token', ''); renderProfile(); },
+  cloudPaste(id) {
+    const req = (S.cloud || []).find(r => r.id === id); if (!req) return;
+    openModal(`<div class="eyebrow">Northstar runner</div><h2>${esc(req.title)}</h2><p class="tiny">If the result has not arrived by itself, open the run with Watch, copy the runner's final answer and paste it here.</p><textarea id="cp-text" class="field" style="width:100%;min-height:180px" placeholder="Paste the runner's answer"></textarea><div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="cp-use">Use this result</button></div>`, 'wide');
+    $('cp-use').onclick = async () => { const t = $('cp-text').value.trim(); if (!t) { toast('Paste the result first'); return; } try { await applyCloudResult(req, t); closeModal(); } catch (e) { toast(e.message); } };
+  },
+  async cloudRemove(id) {
+    const req = (S.cloud || []).find(r => r.id === id); if (!req) return;
+    if (!await confirmBox('Stop waiting for this run?', 'Northstar stops waiting for its result. The run itself is not stopped; you can close it from the Watch page.', 'Stop waiting')) return;
+    cloudCleanup(req, 'removed'); await save(); renderAll();
+  },
   closeModal, go: p => go(p),
   toggleHomeAll() { homeShowAll = !homeShowAll; renderHome(); },
   toggleCollapse(k) { collapseState[k] = !collapseState[k]; renderPage(currentPage); },
@@ -632,6 +661,8 @@ const ACT = {
   openInterview(arg = '') { const [jid, iid] = String(arg).split('|'); openInterviewForm(jid, iid); },
   async draftPrep(iid) {
     const i = S.interviews.find(x => x.id === iid), j = job(i.job_id);
+    const addPrep = async md => { i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md.trim(); await save(); renderInterviews(); toast('Prep notes added. Edit them any time.'); };
+    if (!apiKey()) { chatHandoff({ eyebrow: `${j.company} · ${i.stage || 'Interview'}`, title: 'Prep notes with Claude chat', prompt: AI.chatPrompt(AI.prepPrompt({ job: j, pack: approvedPack(j.id), interview: i, docs: docs() })), onReply: addPrep, cloud: { kind: 'prep', ref: { interview_id: iid }, title: `Prep notes · ${j.company}` } }); return; }
     busy('Drafting prep notes…');
     try { const md = await AI.draftPrep({ key: apiKey(), model: model(), job: j, pack: approvedPack(j.id), interview: i, docs: docs() }); i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md; await save(); renderInterviews(); toast('Prep notes added. Edit them any time.'); }
     catch (e) { toast(e.message); } finally { busy(); }
@@ -692,9 +723,9 @@ const ACT = {
 /* ----- Add role helpers ----- */
 function howRead() {
   if (ext.ready && apiKey()) return 'The Chrome extension reads the page, then the assistant fills in and scores it.';
-  if (ext.ready) return 'The Chrome extension reads the page. Without the assistant, you set the six rubric scores yourself.';
+  if (ext.ready) return 'The Chrome extension reads the page. Then press “Fill and score with Claude chat”, or set the six scores yourself.';
   if (apiKey()) return 'The assistant opens the link, fills in the details and scores it.';
-  return 'Without the extension or the assistant, Northstar fills what it can from the link and you add the rest.';
+  return 'Northstar fills what it can from the link. Then press “Fill and score with Claude chat”, or add the rest yourself.';
 }
 async function readAd(url, pasted) {
   if (!url && !pasted) { toast('Paste the job link'); return; }
@@ -722,6 +753,7 @@ async function readAd(url, pasted) {
     if (!fields.market) fields.market = /dubai|abu dhabi|uae|emirates|sharjah/i.test([fields.location, page?.text?.slice(0, 3000)].join(' ')) ? 'UAE' : 'UK';
     if (!fields.jd_text && page?.text) fields.jd_text = page.text.slice(0, 6000);
     fields._scored = !!ai;
+    fields._page = page?.text || '';
   } catch (e) { toast(e.message); }
   finally { busy(); }
   openRoleForm(fields);
@@ -758,7 +790,7 @@ function parsePage(html, url) {
 function openRoleForm(f) {
   const b = f.breakdown || { experience: 20, role: 15, location: f.market === 'UAE' ? 15 : 10, pay: 9, industry: 10, timing: 3 };
   const num = (k, max) => `<div class="formfield"><label for="rb-${k}">${RUBRIC.find(r => r[0] === k)[1]} (0–${max})</label><input id="rb-${k}" type="number" min="0" max="${max}" value="${+b[k] || 0}"></div>`;
-  openModal(`<div class="eyebrow">Check before saving</div><h2>${esc(f.role || 'New role')}</h2><p>${f._scored ? 'Filled in and scored by the assistant from the ad. Change anything that looks wrong.' : 'Filled from the ad where possible. Add what is missing and set the six scores.'}</p>
+  openModal(`<div class="eyebrow">Check before saving</div><h2>${esc(f.role || 'New role')}</h2><p>${f._scored ? 'Filled in and scored by Claude from the ad. Change anything that looks wrong.' : 'Filled from the ad where possible. Add what is missing and set the six scores.'}</p>
    <div class="formgrid">
     <div class="formfield"><label for="r-company">Company</label><input id="r-company" value="${attr(f.company || '')}"></div>
     <div class="formfield"><label for="r-role">Job title</label><input id="r-role" value="${attr(f.role || '')}"></div>
@@ -778,10 +810,12 @@ function openRoleForm(f) {
     <label class="checkline full"><input type="checkbox" id="r-ko" ${f.knockout ? 'checked' : ''}> Knock-out${f.knockout_reason ? ': ' + esc(f.knockout_reason) : ''} (counted only, not saved)</label>
    </div>
    <div class="notice" id="r-preview" style="margin-top:12px"></div>
-   <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="r-save">Save role</button></div>`, 'wide');
+   <div class="modalfoot">${f._scored ? '' : `<button class="btn" id="r-chat" title="Opens a prompt to paste into a Claude chat. Edits made here are replaced by Claude's reading.">Fill and score with Claude chat</button>`}<button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="r-save">Save role</button></div>`, 'wide');
   const read = () => Object.fromEntries(RUBRIC.map(([k]) => [k, +$('rb-' + k).value || 0]));
   const prev = () => { const { score, fit } = computeFit(read(), { adjacent: $('r-adj').checked, knockout: $('r-ko').checked }); $('r-preview').textContent = `Fit score ${score}/100 · Fit ${fit} · ${fit >= 3 ? 'goes to Discovery' : fit === 2 ? 'goes to the screened-out archive' : 'counted only, not saved'}`; };
   $('modal-box').querySelectorAll('input').forEach(i => i.addEventListener('input', prev)); prev();
+  if ($('r-chat')) $('r-chat').onclick = () => chatHandoff({ eyebrow: 'Add role', title: 'Read and score the ad with Claude chat', prompt: AI.chatPrompt(AI.jobAdPrompt({ url: f.job_url || '', pageText: f._page || f.jd_text || '', docs: docs() })), note: f._page || f.jd_text ? '' : 'Claude will open the job link itself.',
+    onReply: async text => { const ai = AI.extractJson(text); const m = { ...f }; for (const [k, v] of Object.entries(ai)) if (v !== '' && v != null && !(Array.isArray(v) && !v.length)) m[k] = v; if (ai.jd_summary) m.jd_text = ai.jd_summary; m._scored = true; closeModalKeep = false; openRoleForm(m); if (ai.blocked) toast('Claude could not open the page: ' + ai.blocked); } });
   $('r-save').onclick = async () => {
     const g = id => $(id).value.trim();
     if (!g('r-company') || !g('r-role')) { toast('Company and job title are needed'); return; }
@@ -817,38 +851,177 @@ async function runSearch() {
   const markets = activeMarket === 'all' ? (S.profile.markets || ['UAE', 'UK']) : [activeMarket];
   if (S.runs.some(r => r.kind === 'search' && r.status === 'running')) { toast('A search is already running'); return; }
   const sources = S.sources.filter(s => s.enabled && (markets.includes(s.market) || s.market === 'Both'));
+  if (!sources.length) { S.runs.unshift({ id: uid('r'), kind: 'search', markets, status: 'blocked', started_at: now(), funnel: {}, skipped: [], summary: 'No search sources are switched on for ' + markets.join(' and ') + '.' }); await save(); renderAll(); toast('No search sources are switched on. Choose them in Search settings.'); return; }
+  const args = { markets, sources, known: S.jobs.map(j => `${j.company} — ${j.role} — ${j.location || ''}`), blocked: S.blocklist.map(b => b.value), docs: docs() };
+  if (!apiKey()) {
+    chatHandoff({ eyebrow: `Run search · ${markets.join(' + ')}`, title: 'Search with Claude chat', prompt: AI.chatPrompt(AI.searchPrompt(args)), note: 'Use a Claude chat with web search switched on. The search takes a few minutes there.', cloud: { kind: 'search', ref: { markets }, title: 'Run search · ' + markets.join(' + ') },
+      onReply: async text => { const res = AI.extractJson(text); const run = { id: uid('r'), kind: 'search', markets, status: 'running', started_at: now(), funnel: {}, skipped: [], via: 'chat' }; S.runs.unshift(run); applySearch(run, markets, res); await save(); renderAll(); go('home'); } });
+    return;
+  }
   const run = { id: uid('r'), kind: 'search', markets, status: 'running', started_at: now(), funnel: {}, skipped: [] };
   S.runs.unshift(run);
-  if (!apiKey()) { run.status = 'blocked'; run.summary = 'No assistant key is set up, so nothing was searched. Add it in Career profile › Data & connections.'; await save(); renderAll(); toast(run.summary); return; }
-  if (!sources.length) { run.status = 'blocked'; run.summary = 'No search sources are switched on for ' + markets.join(' and ') + '.'; await save(); renderAll(); toast(run.summary); return; }
   await save(); renderAll(); go('home');
   busy(`Searching ${markets.join(' and ')}…`);
   try {
-    const known = S.jobs.map(j => `${j.company} — ${j.role} — ${j.location || ''}`);
-    const blocked = S.blocklist.map(b => b.value);
-    const res = await AI.searchRoles({ key: apiKey(), model: model(), markets, sources, known, blocked, docs: docs(), onProgress: t => busy(t.slice(0, 90)) });
-    let savedTotal = 0;
-    for (const m of markets) {
-      const r = res.markets?.[m] || {};
-      const f = { looked_at: +r.looked_at || 0, duplicates: (+r.duplicates || 0) + (+r.already_tracked || 0), blocked: +r.blocked || 0, knockout: +r.knockout || 0, knockout_reasons: r.knockout_reasons || {}, archived: 0, saved: 0 };
-      for (const x of r.roles || []) {
-        const key = norm(x.company + ' ' + x.role);
-        if (S.jobs.some(j => norm(j.company + ' ' + j.role) === key || (x.job_url && j.job_url === x.job_url))) { f.duplicates++; continue; }
-        if (S.blocklist.some(b => norm(b.value) === key || (b.kind === 'company' && norm(b.value) === norm(x.company)) || (b.kind === 'url' && b.value === x.job_url))) { f.blocked++; continue; }
-        const { score, fit } = computeFit(x.breakdown, { adjacent: x.adjacent_title });
-        if (fit <= 1) { f.knockout++; S.knockouts_counted++; continue; }
-        S.jobs.unshift({ id: uid('j'), company: x.company, role: x.role, market: m, location: x.location, industry: x.industry, salary: x.salary, deadline: x.deadline, source: x.source, also_seen_on: x.also_seen_on || [], job_url: x.job_url, apply_url: x.apply_url || x.job_url, jd_text: x.jd_summary, evidence: x.evidence || [], gaps: x.gaps || [], breakdown: x.breakdown, fit_score: score, fit, adjacent: !!x.adjacent_title, low_confidence: !!x.low_confidence, years_asked: x.years_asked || '', certs_asked: x.certs_asked || '', stage: fit >= 3 ? 'discovery' : 'archived', reason: fit === 2 ? (x.gaps || [])[0] || 'Fit 2' : '', created_at: now(), updated_at: now(), first_seen: now().slice(0, 10), added_by: 'Run search', run_id: run.id });
-        fit >= 3 ? (f.saved++, savedTotal++) : f.archived++;
-      }
-      f.looked_at = Math.max(f.looked_at, f.duplicates + f.blocked + f.knockout + f.archived + f.saved);
-      run.funnel[m] = f;
-    }
-    run.skipped = res.skipped_sources || [];
-    run.status = 'done'; run.ended_at = now();
-    run.summary = `${savedTotal} new role${savedTotal === 1 ? '' : 's'} in Discovery.`;
-    toast(run.summary);
+    const res = await AI.searchRoles({ key: apiKey(), model: model(), ...args, onProgress: t => busy(t.slice(0, 90)) });
+    applySearch(run, markets, res);
   } catch (e) { run.status = 'failed'; run.summary = e.message; toast('Search failed: ' + e.message); }
   finally { busy(); await save(); renderAll(); }
+}
+function applySearch(run, markets, res) {
+  let savedTotal = 0;
+  for (const m of markets) {
+    const r = res.markets?.[m] || {};
+    const f = { looked_at: +r.looked_at || 0, duplicates: (+r.duplicates || 0) + (+r.already_tracked || 0), blocked: +r.blocked || 0, knockout: +r.knockout || 0, knockout_reasons: r.knockout_reasons || {}, archived: 0, saved: 0 };
+    for (const x of r.roles || []) {
+      if (!x || !x.company || !x.role) continue;
+      const key = norm(x.company + ' ' + x.role);
+      if (S.jobs.some(j => norm(j.company + ' ' + j.role) === key || (x.job_url && j.job_url === x.job_url))) { f.duplicates++; continue; }
+      if (S.blocklist.some(b => norm(b.value) === key || (b.kind === 'company' && norm(b.value) === norm(x.company)) || (b.kind === 'url' && b.value === x.job_url))) { f.blocked++; continue; }
+      const { score, fit } = computeFit(x.breakdown, { adjacent: x.adjacent_title });
+      if (fit <= 1) { f.knockout++; S.knockouts_counted++; continue; }
+      S.jobs.unshift({ id: uid('j'), company: x.company, role: x.role, market: m, location: x.location, industry: x.industry, salary: x.salary, deadline: x.deadline, source: x.source, also_seen_on: x.also_seen_on || [], job_url: x.job_url, apply_url: x.apply_url || x.job_url, jd_text: x.jd_summary, evidence: x.evidence || [], gaps: x.gaps || [], breakdown: x.breakdown, fit_score: score, fit, adjacent: !!x.adjacent_title, low_confidence: !!x.low_confidence, years_asked: x.years_asked || '', certs_asked: x.certs_asked || '', stage: fit >= 3 ? 'discovery' : 'archived', reason: fit === 2 ? (x.gaps || [])[0] || 'Fit 2' : '', created_at: now(), updated_at: now(), first_seen: now().slice(0, 10), added_by: 'Run search', run_id: run.id });
+      fit >= 3 ? (f.saved++, savedTotal++) : f.archived++;
+    }
+    f.looked_at = Math.max(f.looked_at, f.duplicates + f.blocked + f.knockout + f.archived + f.saved);
+    run.funnel[m] = f;
+  }
+  run.skipped = res.skipped_sources || [];
+  run.status = 'done'; run.ended_at = now();
+  run.summary = `${savedTotal} new role${savedTotal === 1 ? '' : 's'} in Discovery.`;
+  toast(run.summary);
+}
+
+/* ----- Copy prompt for Claude chat (no API key) ----- */
+function chatHandoff({ eyebrow = '', title, prompt, note = '', onReply, cloud }) {
+  const canCloud = cloud && ext.ready && ext.runner;
+  openModal(`<div class="eyebrow">${esc(eyebrow)}</div><h2>${esc(title)}</h2>
+   ${canCloud ? `<div class="notice" style="margin-bottom:10px"><b>Run it in the cloud.</b> Your Northstar runner does this step on your Claude subscription and the result comes back here. No copy-paste.<div class="actions" style="margin-top:6px"><button class="btn sm primary" id="ch-cloud">Send to Northstar runner</button></div></div><div class="tiny" style="margin-bottom:6px">Or do it yourself in a Claude chat:</div>` : ''}
+   <ol class="steps"><li><b>Copy the prompt.</b> It holds what this step needs: your documents and rules, and the job.<div class="actions" style="margin-top:6px"><button class="btn sm primary" id="ch-copy">Copy prompt</button><a class="btn sm" href="https://claude.ai/new" target="_blank" rel="noopener noreferrer">Open Claude ↗</a><span class="tiny" id="ch-size">${Math.round(prompt.length / 1000)}k characters</span></div></li>
+   <li><b>Paste it into a new Claude chat</b> and send it.${note ? ` <span class="tiny">${esc(note)}</span>` : ''}</li>
+   <li><b>Copy Claude's whole reply</b> and paste it here.<textarea id="ch-reply" class="field" style="width:100%;min-height:150px;margin-top:6px" placeholder="Paste Claude's reply"></textarea></li></ol>
+   <details class="more"><summary>See the prompt</summary><textarea readonly class="field" id="ch-prompt" style="width:100%;min-height:160px;font:12.5px ui-monospace,monospace">${esc(prompt)}</textarea></details>
+   <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="ch-use">Use this reply</button></div>`, 'wide');
+  if (canCloud) $('ch-cloud').onclick = async () => { $('ch-cloud').disabled = true; try { await fireCloud({ ...cloud, prompt }); closeModal(); } catch (e) { toast(e.message); $('ch-cloud').disabled = false; } };
+  $('ch-copy').onclick = async () => {
+    try { await navigator.clipboard.writeText(prompt); }
+    catch { const t = $('ch-prompt'); t.closest('details').open = true; t.select(); document.execCommand('copy'); }
+    $('ch-copy').textContent = 'Copied ✓'; toast('Prompt copied. Paste it into a new Claude chat.');
+  };
+  $('ch-use').onclick = async () => {
+    const text = $('ch-reply').value.trim();
+    if (!text) { toast("Paste Claude's reply first"); return; }
+    try { closeModalKeep = true; await onReply(text); if (closeModalKeep) closeModal(); }
+    catch (e) { toast(e.message); }
+  };
+}
+let closeModalKeep = false;
+
+/* ----- Northstar runner (cloud routine fired through the extension) ----- */
+const CLOUD_MAX = 65000;
+function cloudText(id, kind, prompt) {
+  const head = `NORTHSTAR CLOUD REQUEST\nrequest_id: ${id}\nkind: ${kind}\nsent_at: ${now()}\n\nDo the task below for Sere. Finish with the answer exactly in the form the task asks for.\n\n=====\n\n`;
+  let p = prompt;
+  // The runner keeps copies of the long reference files, so they are swapped for a pointer only when the request would be too long.
+  const swaps = [['cover_letter_playbook', 'cover-letter-playbook.md'], ['search_profile', 'search-profile.md']];
+  for (const [tag, file] of swaps) {
+    if ((head + p).length <= CLOUD_MAX) break;
+    p = p.replace(new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`), `<${tag}>Too long to send with this request: read /mnt/project-files/${file} instead.</${tag}>`);
+  }
+  if ((head + p).length > CLOUD_MAX) throw Error('This request is too long for the cloud runner. Use Copy prompt instead.');
+  return head + p;
+}
+async function fireCloud({ kind, ref, title, prompt }) {
+  const id = uid('c');
+  const text = cloudText(id, kind, prompt);
+  const r = await extRequest({ type: 'fire', text, request_id: id }, 30000);
+  if (!r.ok) throw Error(r.error || 'The runner did not start');
+  const req = { id, kind, ref, title, status: 'waiting', fired_at: now(), session_url: r.session_url || '' };
+  S.cloud = S.cloud || []; S.cloud.unshift(req);
+  if (kind === 'search') S.runs.unshift({ id: uid('r'), kind: 'search', markets: ref.markets, status: 'running', started_at: now(), funnel: {}, skipped: [], via: 'cloud', cloud_id: id, summary: 'Running in the cloud.' });
+  if (kind === 'pack') { const j = job(ref.job_id); if (j) { j.stage = 'drafting'; j.updated_at = now(); } }
+  await save(); renderAll();
+  toast('Sent to your Northstar runner. The result appears here when it is done, usually within 10 minutes.');
+  return req;
+}
+async function applyCloudResult(req, text) {
+  if (req.kind === 'search') {
+    const res = AI.extractJson(text);
+    let run = S.runs.find(r => r.cloud_id === req.id);
+    if (!run) { run = { id: uid('r'), kind: 'search', markets: req.ref.markets, status: 'running', started_at: req.fired_at, funnel: {}, skipped: [], via: 'cloud', cloud_id: req.id }; S.runs.unshift(run); }
+    applySearch(run, req.ref.markets, res);
+  } else if (req.kind === 'pack') {
+    const j = job(req.ref.job_id); if (!j) throw Error('That role is no longer in Northstar');
+    applyPackResult(j, AI.extractJson(text), 'northstar-runner'); j.stage = 'review'; j.updated_at = now();
+    toast(`${j.company}: draft added. Answer the claims, read it, then approve.`);
+  } else if (req.kind === 'prep') {
+    const i = S.interviews.find(x => x.id === req.ref.interview_id); if (!i) throw Error('That interview is no longer in Northstar');
+    const md = String(text).replace(/^\s*```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i, '$1').trim();
+    if (!md) throw Error('The result is empty');
+    i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md;
+    toast('Prep notes added. Edit them any time.');
+  }
+  req.status = 'done'; req.done_at = now(); req.error = '';
+  await save(); renderAll();
+}
+function cloudCleanup(req, why) {
+  req.status = why; req.done_at = now();
+  if (req.kind === 'search') { const run = S.runs.find(r => r.cloud_id === req.id); if (run && run.status === 'running') { run.status = 'failed'; run.summary = 'Cloud run removed before a result arrived.'; } }
+  if (req.kind === 'pack') { const j = job(req.ref.job_id); if (j && j.stage === 'drafting') j.stage = latestPack(j.id) ? 'review' : 'shortlisted'; }
+}
+// Results come back through a private GitHub repository: the runner commits results/<request_id>.json,
+// and this device reads it with a read-only token kept in this browser only.
+const RESULTS_BRANCH = 'claude/results';
+const ghRepo = () => local.get('gh_repo', ''), ghToken = () => local.get('gh_token', '');
+let cloudPolling = false;
+async function pollCloud(manual = false) {
+  const waiting = (S?.cloud || []).filter(r => r.status === 'waiting');
+  if (!waiting.length || cloudPolling) { if (manual && !waiting.length) toast('No cloud run is waiting'); return; }
+  if (!ghRepo() || !ghToken()) { if (manual) toast('Add the results repository and token in Career profile › Data & connections'); return; }
+  cloudPolling = true; let got = 0, problem = '';
+  try {
+    for (const req of waiting) {
+      let r;
+      try { r = await fetch(`https://api.github.com/repos/${ghRepo()}/contents/results/${encodeURIComponent(req.id)}.json?ref=${encodeURIComponent(RESULTS_BRANCH)}&t=${Date.now()}`, { headers: { Authorization: 'Bearer ' + ghToken(), Accept: 'application/vnd.github.raw+json', 'X-GitHub-Api-Version': '2022-11-28' }, cache: 'no-store' }); }
+      catch (e) { problem = 'GitHub could not be reached'; break; }
+      if (r.status === 404) { if (Date.now() - Date.parse(req.fired_at) > 3 * 36e5 && !req.error) { req.error = 'No result after 3 hours. Open Watch to see what happened.'; await save(); renderCloud(); } continue; }
+      if (r.status === 401 || r.status === 403) { problem = 'GitHub refused the results token. Check it in Data & connections.'; break; }
+      if (!r.ok) { problem = 'GitHub answered ' + r.status; break; }
+      let d; try { d = JSON.parse(await r.text()); } catch { req.error = 'The result file could not be read. Use Paste result.'; continue; }
+      if (d.request_id && d.request_id !== req.id) continue;
+      if (!d.ok) { req.error = 'The runner could not finish: ' + String(d.error || 'no reason given').slice(0, 300); await save(); renderCloud(); continue; }
+      try { await applyCloudResult(req, String(d.answer || '')); got++; }
+      catch (e) { req.error = e.message + ' Use Paste result to try again.'; await save(); renderCloud(); }
+    }
+  } finally { cloudPolling = false; }
+  if (problem && manual) toast(problem);
+  else if (manual && !got) toast('No new results yet');
+  local.set('gh_last_check', now()); if (problem) local.set('gh_problem', problem); else local.set('gh_problem', '');
+}
+setInterval(() => { if (document.visibilityState === 'visible') pollCloud(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pollCloud(); });
+
+// Each field is kept as soon as you leave it, so switching tabs to copy the token can't wipe the other one.
+function saveRunnerField(id) {
+  const el = $(id); if (!el) return true;
+  if (id === 'gh-repo') {
+    const repo = el.value.trim().replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$/i, '').replace(/\/+$/, '');
+    if (repo && !/^[\w.-]+\/[\w.-]+$/.test(repo)) { toast('Write the repository as owner/name, for example SerenaGall9/northstar-results'); return false; }
+    local.set('gh_repo', repo); el.value = repo;
+  } else {
+    const t = el.value.trim(); if (t && t !== '••••••••') local.set('gh_token', t);
+  }
+  return true;
+}
+document.addEventListener('change', e => { if (e.target && (e.target.id === 'gh-repo' || e.target.id === 'gh-token')) saveRunnerField(e.target.id); });
+
+function renderCloud() {
+  const box = $('cloud-card'); if (!box) return;
+  const list = (S.cloud || []).filter(r => r.status === 'waiting' || Date.parse(r.done_at || r.fired_at) > Date.now() - 3 * 864e5).slice(0, 12);
+  box.hidden = !list.length;
+  if (!list.length) return;
+  const tag = r => r.status === 'waiting' ? '<span class="tag blue">Working…</span>' : r.status === 'done' ? '<span class="tag green">Added</span>' : '<span class="tag gray">Removed</span>';
+  $('cloud-list').innerHTML = (list.some(r => r.status === 'waiting') ? `<div class="tiny" style="margin-bottom:6px">${ghRepo() && ghToken() ? 'Northstar checks for results every minute while this page is open.' : 'Results arrive by themselves once the results repository is set in Data & connections. Until then, use Paste result.'} <a href="#" data-act="cloudCheck">Check now</a></div>` : '') + list.map(r => `<div class="listrow"><span><b>${esc(r.title)}</b><br><span class="tiny">Sent ${fmtDate(r.fired_at)}${r.error ? ' · ' + esc(r.error) : ''}</span></span><span style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:flex-end">${tag(r)}${r.session_url ? `<a class="btn sm" href="${attr(r.session_url)}" target="_blank" rel="noopener noreferrer">Watch ↗</a>` : ''}${r.status === 'waiting' ? `<button class="btn sm" data-act="cloudPaste" data-arg="${attr(r.id)}">Paste result</button><button class="btn sm" data-act="cloudRemove" data-arg="${attr(r.id)}">Remove</button>` : ''}</span></div>`).join('');
 }
 
 /* ----- Packs ----- */
@@ -859,16 +1032,28 @@ async function startApplication(id) {
   await save();
   if (apiKey()) return draftPackFor(id);
   renderAll(); ACT.goReview(id);
-  toast('No assistant key set up, so no draft was made. You can write it yourself in Review.');
+  chatPack(id);
+}
+function packArgs(j) { const prev = latestPack(j.id); return { job: j, docs: docs(), answers: S.answers, changeRequests: prev?.change_requests || [], previous: prev && (prev.change_requests || []).length ? prev : null }; }
+function applyPackResult(j, r, origin) {
+  if (!r.sections || !r.cover_letter) throw Error('The reply is missing the CV sections or the cover letter. Copy the whole reply and try again.');
+  addPack(j, { sections: r.sections, cl_md: r.cover_letter, claims: (r.claims || []).map(c => ({ question: c.question || String(c), why: c.why || '', state: 'open', answer: '' })), quality: r.quality, gaps: r.gaps, origin });
+}
+function chatPack(id) {
+  const j = job(id);
+  if (!S.docs.master_cv) { toast('Import your setup file first (Career profile › Data & connections)'); return; }
+  const isNew = !!latestPack(id);
+  chatHandoff({ eyebrow: `${j.company} · ${j.role}`, title: isNew ? 'New version with Claude chat' : 'Draft the pack with Claude chat', prompt: AI.chatPrompt(AI.packPrompt(packArgs(j))), cloud: { kind: 'pack', ref: { job_id: id }, title: `${isNew ? 'New version' : 'Pack'} · ${j.company}` },
+    onReply: async text => { applyPackResult(j, AI.extractJson(text), 'claude-chat'); j.stage = 'review'; await save(); renderAll(); ACT.goReview(id); toast('Draft added. Answer the claims, read it, then approve.'); } });
 }
 async function draftPackFor(id) {
-  const j = job(id), prev = latestPack(id);
+  const j = job(id);
   if (!S.docs.master_cv) { toast('Import your setup file first (Career profile › Data & connections)'); return; }
+  if (!apiKey()) return chatPack(id);
   j.stage = 'drafting'; await save(); renderAll(); ACT.goReview(id);
   busy(`Drafting the ${j.company} pack…`);
   try {
-    const r = await AI.draftPack({ key: apiKey(), model: model(), job: j, docs: docs(), answers: S.answers, changeRequests: prev?.change_requests || [], previous: prev && (prev.change_requests || []).length ? prev : null });
-    addPack(j, { sections: r.sections, cl_md: r.cover_letter, claims: (r.claims || []).map(c => ({ question: c.question || String(c), why: c.why || '', state: 'open', answer: '' })), quality: r.quality, gaps: r.gaps, origin: 'assistant' });
+    applyPackResult(j, await AI.draftPack({ key: apiKey(), model: model(), ...packArgs(j) }), 'assistant');
     toast('Draft ready for your review');
   } catch (e) { toast('Drafting failed: ' + e.message); }
   finally { j.stage = 'review'; busy(); await save(); renderAll(); }
@@ -989,6 +1174,8 @@ async function importSetup(text) {
   if (!d.northstar_setup) { toast('That file is not a Northstar setup file'); return; }
   S.docs = { ...S.docs, ...d.docs };
   S.profile = { ...S.profile, ...d.profile, contact: { ...(S.profile.contact || {}), ...(d.profile?.contact || {}) } };
+  // Answers the setup file replaces are removed only if you have not edited them since.
+  for (const r of d.remove_answers || []) S.answers = S.answers.filter(x => !(x.key === answerKey(r.question, r.scope) && x.answer === r.answer));
   for (const a of d.answers || []) if (!S.answers.some(x => x.key === answerKey(a.question, a.scope))) upsertAnswer(a);
   for (const s of d.sources || []) if (!S.sources.some(x => norm(x.name) === norm(s.name) && x.market === s.market)) S.sources.push({ id: uid('s'), enabled: true, kind: 'board', ...s });
   for (const b of d.blocklist || []) S.blocklist.push({ id: uid('b'), created_at: now(), ...b });
@@ -1021,7 +1208,7 @@ window.addEventListener('message', async e => {
   const m = e.data || {};
   if (m.ns !== 'northstar-ext') return;
   if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
-  if (m.type === 'ready') { const was = ext.ready; ext.ready = true; ext.version = m.version || ''; if (!was && S) renderAll(); return; }
+  if (m.type === 'ready') { const was = ext.ready; ext.ready = true; ext.version = m.version || ''; extRequest({ type: 'runner' }).then(r => { const had = ext.runner; ext.runner = !!r.configured; if (had !== ext.runner && S) renderAll(); }).catch(() => { }); if (!was && S) renderAll(); return; }
   if (!S) return;
   if (m.type === 'fill-report') {
     const f = S.fills.find(x => x.id === m.fill_id); if (!f) return;
@@ -1093,7 +1280,7 @@ async function start() {
   renderAll();
   const p = local.get('page', 'home'); if (p !== 'home' && PAGE_NAMES[p]) go(p);
   if (!S.docs.master_cv) showOnboarding();
-  pingExt(); setTimeout(pingExt, 700); setTimeout(() => { if (!ext.ready) setStatus(); renderPage(currentPage); }, 1600);
+  pingExt(); setTimeout(pingExt, 700); setTimeout(() => pollCloud(), 2500); setTimeout(() => { if (!ext.ready) setStatus(); renderPage(currentPage); }, 1600);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 }
 window.addEventListener('focus', async () => { if (!S) return; const fresh = await dbGet('state'); if (fresh && fresh.updated_at !== S.updated_at) { S = { ...blankState(), ...fresh }; renderAll(); } });

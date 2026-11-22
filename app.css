@@ -265,3 +265,5 @@ details.rcard>summary::-webkit-details-marker{display:none}
  .seg button{padding:6px 9px;font-size:13px}
 }
 @media print{.side,.top,.mobile,.toast,.busy{display:none!important}.app{display:block}}
+ol.steps{padding-left:22px;margin:8px 0 12px;display:grid;gap:12px;font-size:15px}
+ol.steps li::marker{font-weight:800;color:var(--green)}
