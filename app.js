@@ -46,15 +46,37 @@ function blankState() {
 
 let S = null;
 let saveTimer = null;
+let baseAt = null; // the saved version this tab's data came from
+const sizeOf = x => x ? (x.jobs || []).length + (x.packs || []).length + (x.answers || []).length + (x.blocklist || []).length : 0;
+function adopt(x) { S = { ...blankState(), ...x }; baseAt = x.updated_at || null; }
+// Safety copies: kept in this browser, newest 12, at most one every 20 minutes unless forced.
+async function backup(reason, force = false) {
+  try {
+    const cur = await dbGet('state'); if (!cur || !sizeOf(cur)) return;
+    const list = (await dbGet('backups')) || [];
+    if (!force && list[0] && Date.now() - Date.parse(list[0].at) < 20 * 60e3) return;
+    list.unshift({ at: now(), reason, counts: { roles: (cur.jobs || []).length, packs: (cur.packs || []).length, answers: (cur.answers || []).length, blocklist: (cur.blocklist || []).length }, state: cur });
+    await dbPut('backups', list.slice(0, 12));
+  } catch (e) { console.warn('backup failed', e); }
+}
 async function save() {
-  S.updated_at = now();
   clearTimeout(saveTimer);
+  // Never overwrite a newer copy saved by another tab or window: reload it instead.
+  const cur = await dbGet('state');
+  if (cur && baseAt && cur.updated_at !== baseAt) {
+    adopt(cur); renderAll();
+    toast('Your data was changed in another Northstar tab, so this tab reloaded it. Please repeat your last step.');
+    throw Error('stale tab');
+  }
+  // A save that would drop most of your data keeps a safety copy first.
+  if (cur && sizeOf(cur) > 10 && sizeOf(S) < sizeOf(cur) / 2) await backup('before a large change', true);
+  S.updated_at = now();
   await dbPut('state', S);
-  // other open tabs pick up the change
+  baseAt = S.updated_at;
   try { bc && bc.postMessage({ type: 'changed', at: S.updated_at }); } catch { }
 }
 const bc = 'BroadcastChannel' in window ? new BroadcastChannel('northstar') : null;
-if (bc) bc.onmessage = async e => { if (e.data?.type === 'changed') { const fresh = await dbGet('state'); if (fresh && fresh.updated_at !== S?.updated_at) { S = fresh; renderAll(); } } };
+if (bc) bc.onmessage = async e => { if (e.data?.type === 'changed') { const fresh = await dbGet('state'); if (fresh && fresh.updated_at !== S?.updated_at) { adopt(fresh); renderAll(); } } };
 
 /* =========================================================
    Helpers
@@ -537,9 +559,11 @@ function renderProfile() {
      <div class="card panel"><div class="panel-head"><div><h2>Your data</h2><small>Saved in this browser on this device only</small></div></div>
       <div class="actions"><button class="btn sm" data-act="importSetup">Import setup file</button><button class="btn sm" data-act="exportSync">⇩ Export sync file</button><button class="btn sm" data-act="importSync">Import sync file</button><button class="btn sm" data-act="exportCsv">⇩ Roles as CSV</button></div>
       <p class="tiny">To use the same tracker on your phone and computer, export a sync file on one and import it on the other. Sync files contain personal data: keep them private. API keys and tokens are never included.</p>
+      <div id="backup-list" class="tiny" style="margin:8px 0">Loading safety copies…</div>
       <p class="tiny">Last saved ${fmtDate(S.updated_at)} · ${S.jobs.length} roles · ${S.packs.length} pack versions · ${S.answers.length} answers</p></div>
      <div class="card panel"><div class="panel-head"><h2>Appearance</h2></div><div class="seg" style="display:inline-flex">${['auto', 'light', 'dark'].map(t => `<button data-act="theme" data-arg="${t}" class="${(local.get('theme', 'auto')) === t ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>
       <div class="divider"></div><button class="btn sm danger" data-act="resetAll">Erase everything on this device</button></div></div>`;
+    renderBackups();
   }
 }
 function srcRow(s) {
@@ -555,7 +579,13 @@ function answerRow(a) {
    Actions
    ========================================================= */
 const ACT = {
-  cloudCheck() { pollCloud(true); },
+  async cloudCheck() { await pollCloud(true); pullMissedResults(true).catch(() => { }); },
+  async restoreBackup(i) {
+    const list = (await dbGet('backups')) || []; const b = list[+i]; if (!b) return;
+    if (!await confirmBox('Restore this safety copy?', `From ${fmtDate(b.at)} (${b.reason}): ${b.counts.roles} roles, ${b.counts.packs} packs, ${b.counts.answers} answers, ${b.counts.blocklist} blocklist entries. What you have now is kept as another safety copy first.`, 'Restore')) return;
+    await backup('before restoring a safety copy', true);
+    const keepBase = (await dbGet('state'))?.updated_at || null; S = { ...blankState(), ...b.state }; baseAt = keepBase; await save(); renderAll(); toast('Safety copy restored');
+  },
   saveRunner() {
     if (!saveRunnerField('gh-repo') || !saveRunnerField('gh-token')) return;
     renderProfile();
@@ -718,7 +748,7 @@ const ACT = {
     const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
     download('northstar-roles.csv', [cols.join(','), ...S.jobs.map(j => cols.map(c => q(j[c])).join(','))].join('\n'), 'text/csv');
   },
-  async resetAll() { if (!await confirmBox('Erase everything on this device?', 'All roles, packs, answers and reports in this browser are deleted. Export a sync file first if you want a copy.', 'Erase')) return; S = blankState(); await save(); renderAll(); go('home'); showOnboarding(); },
+  async resetAll() { if (!await confirmBox('Erase everything on this device?', 'All roles, packs, answers and reports in this browser are deleted. Export a sync file first if you want a copy.', 'Erase')) return; await backup('before erasing', true); const keepBase = baseAt; S = blankState(); baseAt = keepBase; await save(); renderAll(); go('home'); showOnboarding(); },
 };
 
 /* ----- Add role helpers ----- */
@@ -999,6 +1029,27 @@ async function pollCloud(manual = false) {
   else if (manual && !got) toast('No new results yet');
   local.set('gh_last_check', now()); if (problem) local.set('gh_problem', problem); else local.set('gh_problem', '');
 }
+// Search results this device never received (for example after its data was reset) are picked up from the repository too.
+async function pullMissedResults(manual = false) {
+  if (!ghRepo() || !ghToken() || !S) return 0;
+  const h = { Authorization: 'Bearer ' + ghToken(), 'X-GitHub-Api-Version': '2022-11-28' };
+  let r; try { r = await fetch(`https://api.github.com/repos/${ghRepo()}/contents/results?ref=${encodeURIComponent(RESULTS_BRANCH)}&t=${Date.now()}`, { headers: { ...h, Accept: 'application/vnd.github+json' }, cache: 'no-store' }); } catch { return 0; }
+  if (!r.ok) return 0;
+  const files = (await r.json()).filter(f => /^[a-z0-9]+\.json$/.test(f.name));
+  S.cloud = S.cloud || []; let got = 0;
+  for (const f of files) {
+    const id = f.name.replace(/\.json$/, '');
+    if (S.cloud.some(x => x.id === id)) continue;
+    let d; try { const g = await fetch(`https://api.github.com/repos/${ghRepo()}/contents/results/${f.name}?ref=${encodeURIComponent(RESULTS_BRANCH)}`, { headers: { ...h, Accept: 'application/vnd.github.raw+json' }, cache: 'no-store' }); d = JSON.parse(await g.text()); } catch { continue; }
+    const req = { id, kind: d.kind, ref: {}, title: 'Earlier ' + (d.kind || 'run') + ' result', status: 'waiting', fired_at: d.finished_at || now(), session_url: '' };
+    if (d.kind !== 'search' || !d.ok) { req.status = 'removed'; req.done_at = now(); req.error = d.ok ? 'Only search results can be matched without the original request' : String(d.error || ''); S.cloud.push(req); continue; }
+    try { const res = AI.extractJson(String(d.answer || '')); req.ref = { markets: Object.keys(res.markets || {}) }; req.title = 'Run search · ' + req.ref.markets.join(' + '); S.cloud.push(req); await applyCloudResult(req, String(d.answer || '')); got++; }
+    catch (e) { req.status = 'removed'; req.error = e.message; }
+  }
+  await save();
+  if (manual && got) toast(`Picked up ${got} earlier search result${got === 1 ? '' : 's'}.`);
+  return got;
+}
 setInterval(() => { if (document.visibilityState === 'visible') pollCloud(); }, 60000);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') pollCloud(); });
 
@@ -1016,6 +1067,11 @@ function saveRunnerField(id) {
 }
 document.addEventListener('change', e => { if (e.target && (e.target.id === 'gh-repo' || e.target.id === 'gh-token')) saveRunnerField(e.target.id); });
 
+async function renderBackups() {
+  const box = $('backup-list'); if (!box) return;
+  const list = (await dbGet('backups')) || [];
+  box.innerHTML = list.length ? `<b>Safety copies</b> (kept automatically in this browser)<ul class="bullets">${list.map((b, i) => `<li>${esc(fmtDate(b.at))} · ${esc(b.reason)} · ${b.counts.roles} roles, ${b.counts.packs} packs, ${b.counts.answers} answers <button class="btn sm" data-act="restoreBackup" data-arg="${i}">Restore</button></li>`).join('')}</ul>` : 'No safety copies yet. One is made automatically when you open Northstar and before any import.';
+}
 function renderCloud() {
   const box = $('cloud-card'); if (!box) return;
   const list = (S.cloud || []).filter(r => r.status === 'waiting' || Date.parse(r.done_at || r.fired_at) > Date.now() - 3 * 864e5).slice(0, 12);
@@ -1173,6 +1229,7 @@ function pickFile(accept, fn) { const i = document.createElement('input'); i.typ
 async function importSetup(text) {
   let d; try { d = JSON.parse(text); } catch { toast('That file is not a Northstar setup file'); return; }
   if (!d.northstar_setup) { toast('That file is not a Northstar setup file'); return; }
+  await backup('before importing the setup file', true);
   // A second import never overwrites documents you already have (you may have edited them here).
   for (const [k, v] of Object.entries(d.docs || {})) if (v && !S.docs[k]) S.docs[k] = v;
   const before = { a: S.answers.length, b: S.blocklist.length };
@@ -1210,7 +1267,8 @@ async function importSync(text) {
   let d; try { d = JSON.parse(text); } catch { toast('That file is not a Northstar sync file'); return; }
   if (!d.northstar_sync || !d.state) { toast('That file is not a Northstar sync file'); return; }
   if (S.jobs.length && !await confirmBox('Replace the tracker on this device?', `The sync file was exported ${fmtDate(d.exported_at)}. Your data here (last saved ${fmtDate(S.updated_at)}) is replaced by it.`, 'Replace')) return;
-  S = { ...blankState(), ...d.state }; await save(); closeModal(); renderAll(); toast('Sync file imported');
+  await backup('before importing a sync file', true);
+  const keepBase = baseAt; S = { ...blankState(), ...d.state }; baseAt = keepBase; await save(); closeModal(); renderAll(); toast('Sync file imported. Your previous data is kept as a safety copy in Data & connections.');
 }
 
 /* =========================================================
@@ -1298,15 +1356,15 @@ function showOnboarding() {
 }
 async function start() {
   applyTheme();
-  S = await dbGet('state');
-  if (!S) { S = blankState(); await save(); }
-  S = { ...blankState(), ...S };
+  const stored = await dbGet('state');
+  if (stored) adopt(stored); else { S = blankState(); baseAt = null; await save(); }
+  backup('opened Northstar');
   if (runCleanup(false)) await save();
   renderAll();
   const p = local.get('page', 'home'); if (p !== 'home' && PAGE_NAMES[p]) go(p);
   if (!S.docs.master_cv) showOnboarding();
-  pingExt(); setTimeout(pingExt, 700); setTimeout(() => pollCloud(), 2500); setTimeout(() => { if (!ext.ready) setStatus(); renderPage(currentPage); }, 1600);
+  pingExt(); setTimeout(pingExt, 700); setTimeout(() => pollCloud(), 2500); setTimeout(() => pullMissedResults(true).catch(() => { }), 4000); setTimeout(() => { if (!ext.ready) setStatus(); renderPage(currentPage); }, 1600);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 }
-window.addEventListener('focus', async () => { if (!S) return; const fresh = await dbGet('state'); if (fresh && fresh.updated_at !== S.updated_at) { S = { ...blankState(), ...fresh }; renderAll(); } });
+window.addEventListener('focus', async () => { if (!S) return; const fresh = await dbGet('state'); if (fresh && fresh.updated_at !== S.updated_at) { adopt(fresh); renderAll(); } });
 start().catch(e => { console.error(e); toast('Northstar could not open its local data: ' + e.message); });
