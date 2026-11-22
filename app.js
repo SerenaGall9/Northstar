@@ -124,13 +124,45 @@ function statusOf(j) {
       if (f.status === 'needs_you' || f.status === 'blocked') return 'Needs you';
       return 'Filled · check it';
     case 'submitted': return 'Submitted';
-    case 'interview': return 'Interview';
-    case 'closed': return 'Closed';
+    case 'interview': return j.outcome === 'Offer' ? 'Offer' : 'Interview';
+    case 'closed': return ['Rejected', 'Withdrawn'].includes(j.outcome) ? j.outcome : 'Closed';
     case 'discovery': return 'In discovery';
     case 'archived': return 'Archived';
     default: return j.stage;
   }
 }
+/* ----- Manual status changes (never unlock Submit) ----- */
+const MANUAL_STATUS = [['Shortlisted', 'shortlisted', ''], ['Applied', 'submitted', ''], ['Interview', 'interview', ''], ['Offer', 'interview', 'Offer'], ['Rejected', 'closed', 'Rejected'], ['Withdrawn', 'closed', 'Withdrawn'], ['Closed', 'closed', '']];
+function manualLabel(j) { const s = statusOf(j); return s === 'Submitted' ? 'Applied' : MANUAL_STATUS.some(([l]) => l === s) ? s : ''; }
+function statusMenu(j) {
+  const cur = manualLabel(j);
+  return `<select class="stsel" data-statusjob="${attr(j.id)}" aria-label="Change status of ${attr(j.company + ' ' + j.role)}">${cur ? '' : `<option value="" selected disabled>${esc(statusOf(j))}</option>`}${MANUAL_STATUS.map(([l]) => `<option ${l === cur ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+}
+async function setManualStatus(id, label, date, note) {
+  const j = job(id), m = MANUAL_STATUS.find(([l]) => l === label); if (!j || !m) return;
+  const from = statusOf(j); if (manualLabel(j) === label && !note) { toast('It already has that status'); return; }
+  await backup('before changing a status', true);
+  const day = date || now().slice(0, 10);
+  const [, stage, outcome] = m;
+  j.history ||= []; j.history.push({ at: now(), date: day, from, to: label, note: note || '', manual: true });
+  j.stage = stage;
+  if (outcome) j.outcome = outcome; else if (['Offer', 'Rejected', 'Withdrawn'].includes(j.outcome) && label !== 'Closed') delete j.outcome;
+  if (label === 'Shortlisted' && !j.shortlisted_at) j.shortlisted_at = day;
+  if (label === 'Applied' && !j.submitted_at) j.submitted_at = day;
+  if (stage === 'closed') j.closed_at = day;
+  // A manual change never unlocks Submit: any unused Submit approval for this role is withdrawn and the extension relocks.
+  for (const a of S.approvals.filter(a => a.job_id === id && !a.used_at)) { a.used_at = now(); a.revoked = 'manual status change'; }
+  for (const f of S.fills.filter(f => f.job_id === id && !['cancelled', 'done'].includes(f.status))) { f.status = 'cancelled'; f.updated_at = now(); extSend({ type: 'clear', fill_id: f.id }); }
+  j.updated_at = now();
+  await save(); renderAll(); toast(`${j.company}: ${from} → ${label}. Its packs are kept.`);
+}
+function openStatusForm(id) {
+  const j = job(id); if (!j) return;
+  formModal({ eyebrow: `${j.company} · ${j.role}`, title: 'Change status', copy: `Now: ${manualLabel(j) || statusOf(j)}. Packs are kept, and this never approves Submit.`, saveLabel: 'Change status',
+    fields: [{ id: 'st', label: 'New status', type: 'select', options: MANUAL_STATUS.map(([l]) => l), value: manualLabel(j) || 'Applied' }, { id: 'date', label: 'Date', type: 'date', value: now().slice(0, 10) }, { id: 'note', label: 'Note (optional)', type: 'textarea', rows: 2, value: '' }],
+    onSave: async v => { await setManualStatus(id, v.st, v.date, v.note.trim()); } });
+}
+document.addEventListener('change', e => { const t = e.target; if (t && t.dataset && t.dataset.statusjob) setManualStatus(t.dataset.statusjob, t.value, '', ''); });
 function statusClass(s) {
   if (['Ready to review', 'Changes requested', 'Needs you', 'No draft yet', 'Fill queued'].includes(s)) return 'amber';
   if (['Interview', 'Filling', 'Drafting pack'].includes(s)) return 'blue';
@@ -293,7 +325,7 @@ function renderHome() {
   const shown = homeShowAll ? rows : rows.slice(0, 10);
   $('home-rows').innerHTML = rows.length ? `<div class="rowhead"><div>Role</div><div class="c-loc">Location</div><div class="c-fit">Fit</div><div>Status</div><div></div></div>` + shown.map(j => {
     const s = statusOf(j);
-    return `<div class="rowitem"><div><div class="role"><a href="#" data-act="openJob" data-arg="${attr(j.id)}" style="color:inherit;text-decoration:none">${esc(j.role)}</a></div><div class="org">${esc(j.company)}${j.industry ? ' · ' + esc(j.industry) : ''}</div></div><div class="c-loc tiny" style="font-size:14px">${esc(j.location || '')}</div><div class="c-fit">${fitCell(j)}</div><div class="status">${badge(s)}</div><div class="act">${nextButton(j, s)}</div></div>`;
+    return `<div class="rowitem"><div><div class="role"><a href="#" data-act="openJob" data-arg="${attr(j.id)}" style="color:inherit;text-decoration:none">${esc(j.role)}</a></div><div class="org">${esc(j.company)}${j.industry ? ' · ' + esc(j.industry) : ''}</div></div><div class="c-loc tiny" style="font-size:14px">${esc(j.location || '')}</div><div class="c-fit">${fitCell(j)}</div><div class="status">${statusMenu(j)}</div><div class="act">${nextButton(j, s)}</div></div>`;
   }).join('') + (rows.length > 10 ? `<div class="showall"><button class="btn sm" data-act="toggleHomeAll">${homeShowAll ? 'Show fewer' : `Show all ${rows.length}`}</button></div>` : '')
     : `<div class="empty">No approved roles yet. Add a role or run a search, then add the ones you like to your shortlist in Discovery.</div>`;
 
@@ -752,6 +784,7 @@ const ACT = {
     $('ar-url').addEventListener('keydown', e => { if (e.key === 'Enter') $('ar-go').click(); });
   },
   openJob(id) { openJobModal(id); },
+  changeStatus(id) { closeModal(); openStatusForm(id); },
   async shortlist(id) { const j = job(id); j.stage = 'shortlisted'; j.shortlisted_at = now(); j.updated_at = now(); await save(); closeModal(); renderAll(); toast('Added to your shortlist. A pack is made only when you press Start application.'); },
   async dismiss(id) {
     const j = job(id);
@@ -1009,7 +1042,8 @@ function openJobModal(id) {
    <b class="tiny">Gaps and open questions</b><ul class="bullets gap">${lines(j.gaps).map(x => `<li>${esc(x)}</li>`).join('') || '<li>None recorded</li>'}</ul>
    ${j.low_confidence ? '<p class="tiny">Low confidence: thin ad or pay not stated.</p>' : ''}
    ${j.jd_text ? `<details class="more"><summary>Ad summary</summary><p style="white-space:pre-wrap;font-size:14.5px">${esc(j.jd_text)}</p></details>` : ''}
-   <div class="modalfoot">${canShort ? `<button class="btn danger" data-act="dismiss" data-arg="${attr(id)}">Dismiss</button><button class="btn primary" data-act="shortlist" data-arg="${attr(id)}">Add to shortlist</button>` : ['shortlisted', 'review', 'application', 'submitted', 'interview'].includes(j.stage) ? `<button class="btn danger" data-act="closeJob" data-arg="${attr(id)}">Mark Closed</button>` : ''}${j.stage === 'shortlisted' ? `<button class="btn primary" data-act="startApplication" data-arg="${attr(id)}">Start application</button>` : ''}<button class="btn" data-act="closeModal">Close</button></div>`, 'wide');
+   ${(j.history || []).length ? `<details class="more"><summary>Status history (${j.history.length})</summary><ul class="bullets">${[...j.history].reverse().map(h => `<li>${esc(fmtDate(h.date, false))} · ${esc(h.from)} → <b>${esc(h.to)}</b>${h.note ? ' · ' + esc(h.note) : ''}</li>`).join('')}</ul></details>` : ''}
+   <div class="modalfoot">${canShort ? `<button class="btn danger" data-act="dismiss" data-arg="${attr(id)}">Dismiss</button><button class="btn primary" data-act="shortlist" data-arg="${attr(id)}">Add to shortlist</button>` : ['shortlisted', 'review', 'application', 'submitted', 'interview'].includes(j.stage) ? `<button class="btn danger" data-act="closeJob" data-arg="${attr(id)}">Mark Closed</button>` : ''}${j.stage === 'shortlisted' ? `<button class="btn primary" data-act="startApplication" data-arg="${attr(id)}">Start application</button>` : ''}<button class="btn" data-act="changeStatus" data-arg="${attr(id)}">Change status</button><button class="btn" data-act="closeModal">Close</button></div>`, 'wide');
 }
 
 /* ----- Run search ----- */

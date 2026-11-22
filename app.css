@@ -276,3 +276,4 @@ details.ansrow>summary b{overflow-wrap:anywhere}
 details.ansrow[open] .ansprev{display:none}
 .ansfull{padding:0 0 12px;font-size:14.5px;overflow-wrap:anywhere}
 .anstags{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0}
+.stsel{font:inherit;font-size:13px;font-weight:700;border:1px solid var(--line);border-radius:20px;padding:4px 8px;background:var(--mint);color:var(--green);max-width:100%;cursor:pointer}
