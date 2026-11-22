@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#153d32">
+<meta name="northstar-app" content="3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Northstar">
+<title>Northstar</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+<script src="vendor/jspdf.umd.min.js" defer></script>
+</head>
+<body>
+<div class="app">
+<aside class="side">
+ <div class="brand"><div class="mark">✦</div><div><strong>northstar</strong><small>job search, with focus</small></div></div>
+ <div class="nav-label">Your workspace</div>
+ <nav class="nav" id="nav">
+  <button class="active" data-page="home"><span class="glyph">⌂</span>Home</button>
+  <button data-page="discovery"><span class="glyph">⌕</span>Discovery <span class="count" id="n-discovery">0</span></button>
+  <button data-page="review"><span class="glyph">▤</span>Review <span class="count" id="n-review">0</span></button>
+  <button data-page="application"><span class="glyph">↗</span>Application <span class="count" id="n-application">0</span></button>
+  <button data-page="interview"><span class="glyph">◷</span>Interview <span class="count" id="n-interview">0</span></button>
+  <button data-page="profile"><span class="glyph">☺</span>Career profile</button>
+ </nav>
+ <div class="side-bottom">
+  <div class="state" id="st-data"><span class="dot ok"></span>Data saved on this device</div>
+  <div class="state" id="st-ext"><span class="dot"></span>Chrome extension: checking…</div>
+  <div class="state" id="st-ai"><span class="dot"></span>Assistant: not set up</div>
+ </div>
+</aside>
+<main class="main">
+ <header class="top">
+  <div class="crumb">Workspace <span style="padding:0 7px;color:var(--faint)">/</span><b id="crumb">Home</b></div>
+  <div class="topright">
+   <div class="seg" id="markets"><button data-market="all" class="on">All</button><button data-market="UAE">UAE</button><button data-market="UK">UK</button></div>
+  </div>
+ </header>
+ <div class="wrap">
+
+ <!-- HOME -->
+ <section class="page on" id="page-home">
+  <div class="hero"><div class="hero-copy"><div class="eyebrow">A considered search across two markets</div><h1>Make your next move with clarity.</h1><p>Find roles that fit, shape a truthful application, and prepare for the conversations ahead.</p><small>Search and reports run only when you press their buttons. Nothing is scheduled.</small></div>
+   <div class="hero-actions"><button class="btn lime" data-act="runSearch">⌕ Run search</button><button class="btn" data-act="openAddRole">＋ Add role</button></div></div>
+  <div class="stats">
+   <div class="card stat"><div class="statlabel">Shortlisted</div><div class="statnum" id="s-short">0</div><div class="statnote">in your pipeline</div></div>
+   <div class="card stat"><div class="statlabel">Strong fits</div><div class="statnum" id="s-strong">0</div><div class="statnote">fit 4 or 5</div></div>
+   <div class="card stat"><div class="statlabel">To review</div><div class="statnum" id="s-review">0</div><div class="statnote">packs waiting for you</div></div>
+   <div class="card stat"><div class="statlabel">Interviews</div><div class="statnum" id="s-int">0</div><div class="statnote">next 30 days</div></div>
+  </div>
+  <div class="card panel">
+   <div class="panel-head"><div><h2>Approved roles <span class="tag gray" id="home-count">0</span></h2><small>One shortlist from discovery through interview</small></div><button class="btn sm primary" data-act="openAddRole">＋ Add role</button></div>
+   <div class="toolbar"><input class="field search" id="f-q" placeholder="Search company or role"><select class="field" id="f-status"><option value="">All open stages</option></select><select class="field" id="f-fit"><option value="">Any fit</option><option value="4">Fit 4+</option><option value="5">Fit 5</option></select></div>
+   <div class="rows" id="home-rows"></div>
+  </div>
+  <div class="grid2">
+   <div class="card panel"><div class="panel-head"><h2>Next actions</h2><small>From your active work</small></div><div id="next-actions"></div></div>
+   <div class="card panel"><div class="panel-head"><div><h2>Search runs</h2><small>Where roles dropped out, per market</small></div></div><div id="run-list"></div></div>
+  </div>
+ </section>
+
+ <!-- DISCOVERY -->
+ <section class="page" id="page-discovery">
+  <div class="title-row"><div><div class="eyebrow">Evaluate before applying</div><h1>Discovery</h1><p class="subtitle">Each role shows the fit, evidence and open questions behind its score. Adding to the shortlist never creates a pack.</p></div><div class="actions" style="margin:0"><button class="btn" data-act="openAddRole">＋ Add role</button><button class="btn primary" data-act="runSearch">⌕ Run search</button></div></div>
+  <div class="split"><div id="discovery-list"></div>
+   <div><div class="card panel"><div class="panel-head"><h2>Fit rubric</h2><button class="btn sm" data-act="openSource" data-arg="rubric">Read rubric</button></div><div id="rubric-meters"></div><div class="tiny" id="ko-count"></div></div>
+   <div class="card panel" style="margin-top:14px"><div class="panel-head"><h2>Search sources</h2><button class="btn sm" data-act="goSettings">Search settings</button></div><div id="src-summary" class="tiny"></div></div></div>
+  </div>
+ </section>
+
+ <!-- REVIEW -->
+ <section class="page" id="page-review">
+  <div class="title-row"><div><div class="eyebrow">Evidence before polish</div><h1>Review</h1><p class="subtitle">Tap a role to open it. Answer each claim, read the exact version, then approve it.</p></div><button class="btn" data-act="openSource" data-arg="playbook">Writing standards</button></div>
+  <div id="review-list"></div>
+ </section>
+
+ <!-- APPLICATION -->
+ <section class="page" id="page-application">
+  <div class="title-row"><div><div class="eyebrow">A careful handoff to each application</div><h1>Application</h1><p class="subtitle">Only roles you approved appear here. Passwords, MFA, CAPTCHAs, declarations and consent stay with you.</p></div><button class="btn primary" data-act="fillBatch">Fill approved batch</button></div>
+  <div class="notice" id="app-notice" style="margin-bottom:14px"></div>
+  <div class="kanban" id="board"></div>
+ </section>
+
+ <!-- INTERVIEW -->
+ <section class="page" id="page-interview">
+  <div class="title-row"><div><div class="eyebrow">Prepare for the conversation</div><h1>Interview</h1><p class="subtitle">Dates, time zones, links and prep notes. Nothing is read from your calendar or email.</p></div><button class="btn primary" data-act="openInterview">＋ Add interview</button></div>
+  <div id="interview-list"></div>
+ </section>
+
+ <!-- PROFILE -->
+ <section class="page" id="page-profile">
+  <div class="title-row"><div><div class="eyebrow">Your evidence, preferences and progress</div><h1>Career profile & reports</h1><p class="subtitle">Keep targets current, save confirmed answers and make a seven-day report when you need one.</p></div></div>
+  <div class="tabs" id="ptabs"><button class="on" data-ptab="settings">Search settings</button><button data-ptab="answers">Answers</button><button data-ptab="cv">Master CV</button><button data-ptab="blocklist">Blocklist</button><button data-ptab="reports">Reports</button><button data-ptab="data">Data & connections</button></div>
+  <div id="profile-view"></div>
+ </section>
+ </div>
+</main>
+</div>
+
+<nav class="mobile" id="mobile-nav">
+ <button class="on" data-page="home"><span class="glyph">⌂</span>Home</button>
+ <button data-page="discovery"><span class="glyph">⌕</span>Discover</button>
+ <button data-page="review"><span class="glyph">▤</span>Review</button>
+ <button data-page="application"><span class="glyph">↗</span>Apply</button>
+ <button data-page="interview"><span class="glyph">◷</span>Interview</button>
+ <button data-page="profile"><span class="glyph">☺</span>Profile</button>
+</nav>
+
+<div class="modalbg" id="modal"><div class="modal" id="modal-box"></div></div>
+<div class="toast" id="toast" role="status"></div>
+<div class="busy" id="busy"><span class="spin"></span><span id="busy-text">Working…</span></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
