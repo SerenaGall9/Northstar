@@ -59,7 +59,10 @@ async function backup(reason, force = false) {
     await dbPut('backups', list.slice(0, 12));
   } catch (e) { console.warn('backup failed', e); }
 }
-async function save() {
+// Saves from this tab run one after another: two overlapping saves used to look like "another tab changed it" and threw away the newest change.
+let saveChain = Promise.resolve();
+function save() { const p = saveChain.then(saveNow); saveChain = p.catch(() => { }); return p; }
+async function saveNow() {
   clearTimeout(saveTimer);
   // Never overwrite a newer copy saved by another tab or window: reload it instead.
   const cur = await dbGet('state');
