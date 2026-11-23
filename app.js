@@ -535,13 +535,15 @@ function claimBox(p, c, i) {
 function renderApps() {
   const cols = [['needs', 'Needs your input'], ['ready', 'Ready to fill'], ['active', 'Filled · check it'], ['submitted', 'Submitted']];
   const all = S.jobs.filter(j => ['application', 'submitted', 'interview'].includes(j.stage) && visible(j));
-  const col = j => { if (j.stage !== 'application') return 'submitted'; const f = activeFill(j.id); if (!f || f.status === 'pending') return 'ready'; if (['needs_you', 'blocked'].includes(f.status)) return 'needs'; return 'active'; };
+  const col = j => { if (j.stage !== 'application') return 'submitted'; const f = activeFill(j.id); if (!f || f.status === 'pending') return 'ready'; if (['needs_you', 'blocked'].includes(f.status) || noForm(f)) return 'needs'; return 'active'; };
   $('board').innerHTML = cols.map(([k, t]) => { const r = all.filter(j => col(j) === k); return `<div class="column"><div class="colhead">${t}<span class="tag gray">${r.length}</span></div>${collapsible(r.map(appCard), 6, 'col-' + k) || '<div class="tiny">No roles at this stage.</div>'}</div>`; }).join('');
   $('app-notice').innerHTML = ext.ready
     ? 'Chrome extension connected. Filling opens the employer form in a new tab and fills only confirmed answers and your approved documents. Submit stays locked on that page until you approve this one application here.'
     : isMobile() ? 'Form filling needs Chrome on a computer with the Northstar extension. On this phone you can review, approve and record submissions.'
       : 'Chrome extension not connected. Install it from the extension folder (see README), then reload this page. Fill requests stay queued until then.';
 }
+// The page opened but nothing was filled or attached: usually a job listing (LinkedIn) where the form only opens after Apply / Easy Apply
+const noForm = f => !!f && !['pending', 'sent', 'blocked'].includes(f.status) && !!f.report && !(f.report.filled || []).length && !(f.report.attached || []).length && !(f.report.needs || []).length;
 function appCard(j) {
   const f = activeFill(j.id), p = approvedPack(j.id), appr = approvalFor(j.id), rep = f?.report || {};
   let body = '';
@@ -552,6 +554,12 @@ function appCard(j) {
     const url = `<input class="field" placeholder="Application form link" value="${attr(j.apply_url || j.job_url || '')}" data-change="applyUrl" data-arg="${attr(j.id)}">`;
     if (!f) body = `<p>Approved pack v${p ? p.version : '?'} is ready. Filling starts only when you choose.</p>${url}<label class="checkline"><input type="checkbox" class="batchpick" value="${attr(j.id)}"> Include in the next batch</label><div class="actions"><button class="btn sm primary" data-act="fillOne" data-arg="${attr(j.id)}">Fill this one now</button></div>`;
     else if (f.status === 'pending') body = `<p>Fill request saved ${fmtDate(f.created_at)}. ${ext.ready ? '' : 'Waiting for the Chrome extension; the form has not been touched.'}</p><div class="actions">${ext.ready ? `<button class="btn sm primary" data-act="sendFill" data-arg="${attr(f.id)}">Send to Chrome</button>` : ''}<button class="btn sm" data-act="cancelFill" data-arg="${attr(f.id)}">Cancel request</button></div>`;
+    else if (noForm(f) && !appr) {
+      const li = /linkedin\./i.test(rep.url_host || '');
+      body = `<p>Opened ${esc(rep.url_host || 'the page')}, but there was no application form on it, so nothing was filled.</p>
+       <p class="tiny">${li ? 'A LinkedIn job page has no form until you press <b>Easy Apply</b> or <b>Apply</b>. Press Open in Chrome again, then press that button on the page: Northstar fills the form as it opens, or follows you to the employer\'s site.' : 'Press Open in Chrome again, then press the Apply button on the page: Northstar fills the form as it opens. If you know the direct link to the form, paste it here first.'}</p>${url}
+       <div class="actions"><button class="btn sm primary" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open in Chrome again</button></div>`;
+    }
     else {
       const needs = rep.needs || [];
       body = `<p>${f.status === 'sent' ? 'Sent to Chrome ' + fmtDate(f.updated_at) + '. Waiting for the page report.' : f.status === 'blocked' ? 'Blocked: ' + esc(rep.blocked || 'the page stopped the fill') : `Filled ${(rep.filled || []).length} field(s) on ${esc(rep.url_host || 'the form')}${rep.pages > 1 ? ` across ${rep.pages} pages` : ''}.`}</p>
