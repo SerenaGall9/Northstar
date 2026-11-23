@@ -77,6 +77,7 @@ async function saveNow() {
   await dbPut('state', S);
   baseAt = S.updated_at;
   try { bc && bc.postMessage({ type: 'changed', at: S.updated_at }); } catch { }
+  if (typeof scheduleSync === 'function') scheduleSync();
 }
 const bc = 'BroadcastChannel' in window ? new BroadcastChannel('northstar') : null;
 if (bc) bc.onmessage = async e => { if (e.data?.type === 'changed') { const fresh = await dbGet('state'); if (fresh && fresh.updated_at !== S?.updated_at) { adopt(fresh); renderAll(); } } };
@@ -656,14 +657,15 @@ function renderProfile() {
       <ul class="checks" style="list-style:none;padding:0;margin:0 0 10px">
        <li>${ext.runner ? '✅' : '⬜'} <b>Starting runs</b>: ${ext.runner ? 'on, set in the extension menu' : ext.ready ? 'paste the routine\'s Fire URL and token in the <b>extension menu</b> (puzzle icon › Northstar Autofill)' : 'install the Chrome extension first'}</li>
        <li>${ghRepo() ? '✅' : '⬜'} <b>Results repository</b>: ${ghRepo() ? esc(ghRepo()) : 'type it below'}</li>
-       <li>${ghToken() ? '✅' : '⬜'} <b>Read-only token</b>: ${ghToken() ? 'saved on this device' : 'paste it below'}</li></ul>
+       <li>${ghToken() ? '✅' : '⬜'} <b>GitHub token</b>: ${ghToken() ? 'saved on this device' : 'paste it below'}</li></ul>
       <div class="formgrid"><div class="formfield"><label>Results repository (owner/name)</label><input id="gh-repo" value="${attr(ghRepo())}" placeholder="e.g. SerenaGall9/northstar-results"></div>
-      <div class="formfield"><label>Read-only GitHub token (this device only, never exported)</label><input id="gh-token" type="password" autocomplete="off" value="${ghToken() ? '••••••••' : ''}" placeholder="github_pat_…"></div></div>
+      <div class="formfield"><label>GitHub token (this device only, never exported)</label><input id="gh-token" type="password" autocomplete="off" value="${ghToken() ? '••••••••' : ''}" placeholder="github_pat_…"></div></div>
       <div class="actions"><button class="btn primary sm" data-act="saveRunner">Save</button>${ghToken() ? '<button class="btn sm danger" data-act="clearRunner">Remove token</button>' : ''}</div>
       ${local.get('gh_problem', '') ? `<div class="notice warn">${esc(local.get('gh_problem', ''))}</div>` : ''}</div>
      <div class="card panel"><div class="panel-head"><div><h2>Chrome extension</h2><small>Fills forms from your approved pack. Never submits without your approval.</small></div><span class="tag ${ext.ready ? 'green' : 'amber'}">${ext.ready ? 'Connected' : 'Not connected'}</span></div>
       <ul class="bullets"><li>Install: chrome://extensions → Developer mode → Load unpacked → choose the <b>extension</b> folder.</li><li>If this page is not on localhost, open the extension's menu on this page and press <b>Trust this Northstar page</b>.</li><li>Phones: form filling is not available, everything else works.</li></ul></div>
-     <div class="card panel"><div class="panel-head"><div><h2>Your data</h2><small>Saved in this browser on this device only</small></div></div>
+     ${syncPanelHtml()}
+     <div class="card panel"><div class="panel-head"><div><h2>Your data</h2><small>${syncOn() ? 'Saved in this browser and synced to your other devices' : 'Saved in this browser on this device only'}</small></div></div>
       <div class="actions"><button class="btn sm" data-act="importSetup">Import setup file</button><button class="btn sm" data-act="exportSync">⇩ Export sync file</button><button class="btn sm" data-act="importSync">Import sync file</button><button class="btn sm" data-act="exportCsv">⇩ Roles as CSV</button></div>
       <p class="tiny">To use the same tracker on your phone and computer, export a sync file on one and import it on the other. Sync files contain personal data: keep them private. API keys and tokens are never included.</p>
       <div id="backup-list" class="tiny" style="margin:8px 0">Loading safety copies…</div>
@@ -1361,6 +1363,7 @@ function saveRunnerField(id) {
   return true;
 }
 document.addEventListener('change', e => { if (e.target && (e.target.id === 'gh-repo' || e.target.id === 'gh-token')) saveRunnerField(e.target.id); });
+document.addEventListener('input', e => { const t = e.target; if (!t) return; if (t.id === 'gh-token') saveRunnerField('gh-token'); if (t.id === 'gh-repo' && /^[\w.-]+\/[\w.-]+$/.test(t.value.trim())) local.set('gh_repo', t.value.trim()); });
 
 async function renderBackups() {
   const box = $('backup-list'); if (!box) return;
@@ -1666,14 +1669,198 @@ async function sendFill(fid) {
   } catch (e) { toast(e.message); } finally { busy(); }
 }
 
+
+/* =========================================================
+   Sync between your devices (encrypted copy in your private results repository)
+   ========================================================= */
+// The copy is encrypted in this browser with your sync password before it leaves; GitHub only stores scrambled text.
+// Each device keeps the last version it synced ("base") so it can tell what changed where and merge item by item.
+const SYNC_BRANCH = 'northstar-sync', SYNC_PATH = 'sync/northstar-data.json';
+const syncPass = () => local.get('sync_pass', ''), syncOn = () => !!(ghRepo() && ghToken() && syncPass());
+let syncBusy = false, syncTimer = null, syncKeyCache = null, syncApplying = false, syncPassDraft = '';
+// keep what you type if the page redraws while you are still typing
+document.addEventListener('input', e => { if (e.target && e.target.id === 'sync-pass') syncPassDraft = e.target.value; });
+const b64e = buf => { let s = ''; const b = new Uint8Array(buf); for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); };
+const b64d = str => Uint8Array.from(atob(str), c => c.charCodeAt(0));
+async function syncKey(salt) {
+  const id = syncPass() + '|' + b64e(salt);
+  if (syncKeyCache && syncKeyCache.id === id) return syncKeyCache.key;
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(syncPass()), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: 250000, hash: 'SHA-256' }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  syncKeyCache = { id, key }; return key;
+}
+async function gz(bytes, how) {
+  if (!('CompressionStream' in window)) return bytes;
+  const st = new Blob([bytes]).stream().pipeThrough(how === 'in' ? new CompressionStream('gzip') : new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(st).arrayBuffer());
+}
+async function encryptState(state) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
+  const zipped = 'CompressionStream' in window;
+  const plain = await gz(new TextEncoder().encode(JSON.stringify(state)), 'in');
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await syncKey(salt), plain);
+  return { northstar_sync_v: 1, saved_at: now(), device: deviceName(), zipped, salt: b64e(salt), iv: b64e(iv), data: b64e(data) };
+}
+async function decryptState(file) {
+  let plain;
+  try { plain = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64d(file.iv) }, await syncKey(b64d(file.salt)), b64d(file.data))); }
+  catch { throw Error('Wrong sync password: use the same sync password on every device.'); }
+  if (file.zipped) plain = await gz(plain, 'out');
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+function deviceName() {
+  const n = local.get('device_name', ''); if (n) return n;
+  const ua = navigator.userAgent; return /iPhone|Android.+Mobile/.test(ua) ? 'Phone' : /iPad|Android/.test(ua) ? 'Tablet' : 'Computer';
+}
+const ghH = (extra = {}) => ({ Authorization: 'Bearer ' + ghToken(), 'X-GitHub-Api-Version': '2022-11-28', ...extra });
+async function ghJson(path, opts = {}) {
+  const r = await fetch('https://api.github.com/repos/' + ghRepo() + path, { cache: 'no-store', ...opts, headers: ghH({ Accept: 'application/vnd.github+json', ...(opts.body ? { 'Content-Type': 'application/json' } : {}) }) });
+  const j = await r.json().catch(() => ({}));
+  return { status: r.status, ok: r.ok, j };
+}
+function syncHttpError(st, what) {
+  return Error(st === 401 ? 'The GitHub token is not valid any more. Paste a new one under Data & connections.'
+    : st === 403 ? 'The GitHub token can only read. Make one that can also write (Contents: Read and write) for ' + ghRepo() + '.'
+    : st === 404 ? 'GitHub could not find ' + ghRepo() + ' with this token. Check the repository name and that the token includes it.'
+    : `GitHub answered ${st} while ${what}.`);
+}
+async function ensureSyncBranch() {
+  const b = await ghJson('/branches/' + SYNC_BRANCH);
+  if (b.ok) return;
+  if (b.status !== 404) throw syncHttpError(b.status, 'checking the sync branch');
+  const repo = await ghJson(''); if (!repo.ok) throw syncHttpError(repo.status, 'reading the repository');
+  const ref = await ghJson('/git/ref/heads/' + encodeURIComponent(repo.j.default_branch)); if (!ref.ok) throw syncHttpError(ref.status, 'reading the main branch');
+  const mk = await ghJson('/git/refs', { method: 'POST', body: JSON.stringify({ ref: 'refs/heads/' + SYNC_BRANCH, sha: ref.j.object.sha }) });
+  if (!mk.ok && mk.status !== 422) throw syncHttpError(mk.status, 'making the sync branch');
+}
+async function readRemote() {
+  const r = await ghJson(`/contents/${SYNC_PATH}?ref=${SYNC_BRANCH}&t=${Date.now()}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw syncHttpError(r.status, 'reading the synced copy');
+  let text;
+  if (r.j.content && r.j.encoding === 'base64') text = new TextDecoder().decode(b64d(r.j.content.replace(/\s/g, '')));
+  else { const bl = await ghJson('/git/blobs/' + r.j.sha); if (!bl.ok) throw syncHttpError(bl.status, 'reading the synced copy'); text = new TextDecoder().decode(b64d(bl.j.content.replace(/\s/g, ''))); }
+  return { sha: r.j.sha, file: JSON.parse(text) };
+}
+async function writeRemote(state, sha) {
+  const file = await encryptState(state);
+  const body = { message: `Northstar sync from ${deviceName()}`, branch: SYNC_BRANCH, content: b64e(new TextEncoder().encode(JSON.stringify(file))) };
+  if (sha) body.sha = sha;
+  const r = await ghJson('/contents/' + SYNC_PATH, { method: 'PUT', body: JSON.stringify(body) });
+  if (r.status === 409 || r.status === 422) return { conflict: true };
+  if (!r.ok) throw syncHttpError(r.status, 'saving the synced copy');
+  return { sha: r.j.content?.sha };
+}
+
+// ---- merging ----
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const itemKey = x => x && typeof x === 'object' ? (x.id ?? x.key ?? (x.kind && x.value != null ? x.kind + ':' + x.value : null)) : null;
+const stamp = x => Date.parse(x?.updated_at || x?.done_at || x?.approved_at || x?.at || x?.created_at || x?.started_at || '') || 0;
+function mergeList(base, mine, theirs) {
+  if (![...mine, ...theirs].every(x => itemKey(x) != null)) return null; // not a list of identified items
+  const B = new Map((base || []).filter(x => itemKey(x) != null).map(x => [itemKey(x), x])), M = new Map(mine.map(x => [itemKey(x), x])), T = new Map(theirs.map(x => [itemKey(x), x]));
+  const out = [];
+  for (const x of theirs) {
+    const k = itemKey(x), m = M.get(k), b = B.get(k);
+    if (!m) { if (b === undefined || !same(b, x)) out.push(x); continue; } // deleted here (and unchanged there) → stays deleted
+    out.push(merge3(b, m, x, stamp(m) >= stamp(x)));
+  }
+  mine.forEach((x, i) => { const k = itemKey(x); if (T.has(k)) return; const b = B.get(k); if (b !== undefined && same(b, x)) return; out.splice(Math.min(i, out.length), 0, x); }); // new here, or changed here after being deleted there
+  return out;
+}
+const isBlank = v => v == null || v === '' || (Array.isArray(v) && !v.length) || (typeof v === 'object' && !Array.isArray(v) && !Object.keys(v).length);
+function merge3(base, mine, theirs, preferMine = true) {
+  if (same(mine, theirs)) return mine;
+  // first sync of a device: an empty value never beats a filled one
+  if (base === undefined && isBlank(mine)) return theirs;
+  if (base === undefined && isBlank(theirs)) return mine;
+  if (base !== undefined && same(mine, base)) return theirs;
+  if (base !== undefined && same(theirs, base)) return mine;
+  if (Array.isArray(mine) && Array.isArray(theirs)) { const l = mergeList(Array.isArray(base) ? base : [], mine, theirs); if (l) return l; return preferMine ? mine : theirs; }
+  if (mine && theirs && typeof mine === 'object' && typeof theirs === 'object' && !Array.isArray(mine) && !Array.isArray(theirs)) {
+    const out = {}, b = base && typeof base === 'object' ? base : {};
+    for (const k of new Set([...Object.keys(mine), ...Object.keys(theirs)])) {
+      if (!(k in theirs)) { if (!(k in b) || !same(b[k], mine[k])) out[k] = mine[k]; continue; }
+      if (!(k in mine)) { if (!(k in b) || !same(b[k], theirs[k])) out[k] = theirs[k]; continue; }
+      out[k] = merge3(b[k], mine[k], theirs[k], preferMine);
+    }
+    return out;
+  }
+  return preferMine ? mine : theirs;
+}
+
+// ---- one sync round ----
+async function syncNow(manual = false) {
+  if (!syncOn() || !S) { if (manual) toast('Turn on sync first under Career profile › Data & connections'); return; }
+  if (syncBusy) return; syncBusy = true; clearTimeout(syncTimer); setSyncStatus('Syncing…');
+  try {
+    if (!navigator.onLine) throw Error('Offline: Northstar syncs when you are back online.');
+    await ensureSyncBranch();
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const remote = await readRemote();
+      const base = await dbGet('sync_base');
+      let merged = S;
+      if (remote) {
+        const theirs = await decryptState(remote.file);
+        merged = { ...blankState(), ...merge3(base || undefined, S, { ...blankState(), ...theirs }, (Date.parse(S.updated_at) || 0) >= (Date.parse(theirs.updated_at) || 0)) };
+        if (!same(merged, S)) {
+          await backup('before syncing from ' + (remote.file.device || 'your other device'), true);
+          syncApplying = true;
+          try { S = merged; await save(); } finally { syncApplying = false; }
+          renderAll();
+        }
+        if (same(merged, theirs) || same(stripStamp(merged), stripStamp(theirs))) { await dbPut('sync_base', S); done(remote.file); return; }
+      }
+      const w = await writeRemote(S, remote?.sha);
+      if (w.conflict) continue; // the other device saved at the same moment: read again and merge
+      await dbPut('sync_base', S); done({ device: deviceName(), saved_at: now() }); return;
+    }
+    throw Error('Your devices kept saving at the same moment. Press Sync now again.');
+  } catch (e) {
+    local.set('sync_problem', e.message); setSyncStatus(''); if (manual || !/Offline/.test(e.message)) toast('Sync: ' + e.message);
+  } finally { syncBusy = false; renderSyncPanel(); }
+  function done(f) { local.set('sync_last', { at: now(), from: f.device || '' }); local.set('sync_problem', ''); setSyncStatus(''); if (manual) toast('Synced. This device is up to date.'); }
+}
+const stripStamp = x => { const { updated_at, ...rest } = x || {}; return rest; };
+function scheduleSync(ms = 6000) { if (!syncOn() || syncApplying) return; clearTimeout(syncTimer); syncTimer = setTimeout(() => syncNow(false), ms); }
+function setSyncStatus(t) { const el = $('sync-state'); if (el) el.textContent = t; }
+function syncPanelHtml() {
+  const last = local.get('sync_last', null), prob = local.get('sync_problem', '');
+  return `<div class="card panel" id="sync-panel"><div class="panel-head"><div><h2>Sync your devices</h2><small>Phone and computer share the same data through your private ${esc(ghRepo() || 'results')} repository</small></div><span class="tag ${syncOn() && !prob ? 'green' : 'amber'}">${syncOn() ? (prob ? 'Needs attention' : 'On') : 'Off'}</span></div>
+    ${syncOn() ? `<p class="tiny">${last ? `Last synced ${esc(fmtDate(last.at))}${last.from && last.from !== deviceName() ? ' · newest changes came from your ' + esc(last.from.toLowerCase()) : ''}.` : 'Not synced yet.'} <span id="sync-state"></span></p>
+      ${prob ? `<div class="notice warn">${esc(prob)}</div>` : ''}
+      <div class="actions"><button class="btn sm primary" data-act="syncNowBtn">Sync now</button><button class="btn sm danger" data-act="syncOff">Turn off on this device</button></div>
+      <p class="tiny">Encrypted with your sync password before it leaves this device. A safety copy is kept before every merge (see the list below).</p>`
+    : `<p class="tiny">Uses the repository and GitHub token above. The token must be able to <b>write</b> (Contents: Read and write). Choose a sync password and use the same one on every device. It is kept on this device only and never sent anywhere.</p>
+      <div class="formgrid"><div class="formfield"><label>Sync password</label><input id="sync-pass" type="password" autocomplete="new-password" placeholder="at least 8 characters" value="${attr(syncPassDraft)}"></div><div class="formfield"><label>This device is my</label><select id="sync-dev">${['Computer', 'Phone', 'Tablet'].map(d => `<option ${d === deviceName() ? 'selected' : ''}>${d}</option>`).join('')}</select></div></div>
+      <div class="actions"><button class="btn sm primary" data-act="syncTurnOn">Turn on sync</button></div>${ghRepo() && ghToken() ? '' : '<p class="tiny" style="color:var(--amber)">First fill in the results repository and GitHub token above.</p>'}`}</div>`;
+}
+function renderSyncPanel() { const el = $('sync-panel'); if (el) el.outerHTML = syncPanelHtml(); }
+Object.assign(ACT, {
+  async syncTurnOn() {
+    saveRunnerField('gh-repo'); saveRunnerField('gh-token');
+    const pw = ($('sync-pass')?.value || syncPassDraft || '').trim();
+    if (!ghRepo() || !ghToken()) { toast('Fill in the results repository and GitHub token first'); return; }
+    if (pw.length < 8) { toast('Choose a sync password of at least 8 characters'); return; }
+    local.set('sync_pass', pw); syncPassDraft = ''; local.set('device_name', $('sync-dev')?.value || deviceName()); local.set('sync_problem', '');
+    renderSyncPanel(); await syncNow(true); renderAll();
+  },
+  syncNowBtn: () => syncNow(true),
+  openSyncSetup() { closeModal(); go('profile'); profileTab = 'data'; document.querySelectorAll('[data-ptab]').forEach(x => x.classList.toggle('on', x.dataset.ptab === 'data')); renderProfile(); setTimeout(() => $('gh-repo')?.scrollIntoView({ block: 'center' }), 100); },
+  async syncOff() { if (!await confirmBox('Turn off sync on this device?', 'Your data stays on this device. It stops sending and receiving changes until you turn sync on again.', 'Turn off')) return; local.set('sync_pass', ''); syncKeyCache = null; await dbPut('sync_base', null); renderProfile(); },
+});
+setInterval(() => { if (document.visibilityState === 'visible') scheduleSync(100); }, 120000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') scheduleSync(300); });
+window.addEventListener('online', () => scheduleSync(500));
+
 /* =========================================================
    Onboarding, theme, start
    ========================================================= */
 function applyTheme() { const t = local.get('theme', 'auto'); if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = t; }
 function showOnboarding() {
   openModal(`<div class="eyebrow">Welcome to Northstar</div><h2>Load your profile</h2><p>Import your private setup file (northstar-setup.json) to load your Master CV, cover letter playbook, fit rubric, saved answers and search sources. It stays in this browser on this device.</p>
-   <ul class="bullets"><li>Moving from another device? Import a sync file instead.</li><li>Your data never leaves this device unless you press a button that uses the assistant or export a file.</li></ul>
-   <div class="modalfoot"><button class="btn" data-act="closeModal">Later</button><button class="btn" data-act="importSync">Import sync file</button><button class="btn primary" data-act="importSetup">Import setup file</button></div>`);
+   <ul class="bullets"><li>Already using Northstar on another device? Press <b>Sync from my other device</b> and enter the same GitHub token and sync password.</li><li>Your data never leaves this device unless you press a button that uses the assistant or export a file.</li></ul>
+   <div class="modalfoot"><button class="btn" data-act="closeModal">Later</button><button class="btn" data-act="openSyncSetup">Sync from my other device</button><button class="btn primary" data-act="importSetup">Import setup file</button></div>`);
 }
 async function start() {
   applyTheme();
@@ -1685,6 +1872,7 @@ async function start() {
   renderAll();
   const p = local.get('page', 'home'); if (p !== 'home' && PAGE_NAMES[p]) go(p);
   if (!S.docs.master_cv) showOnboarding();
+  if (syncOn()) setTimeout(() => syncNow(false), 1200);
   pingExt(); setTimeout(pingExt, 700); setTimeout(() => pollCloud(), 2500); setTimeout(() => pullMissedResults(true).catch(() => { }), 4000); setTimeout(() => { if (!ext.ready) setStatus(); renderPage(currentPage); }, 1600);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { });
 }
