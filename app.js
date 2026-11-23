@@ -1596,6 +1596,7 @@ window.addEventListener('message', async e => {
   if (!S) return;
   if (m.type === 'fill-report') {
     const f = S.fills.find(x => x.id === m.fill_id); if (!f) return;
+    if (m.report && m.report.url_host === location.host) return; // a Northstar page opened in the fill tab is not an employer form
     f.report = m.report; f.updated_at = now();
     f.status = m.report.blocked ? 'blocked' : (m.report.needs || []).length ? 'needs_you' : 'filled';
     // new questions from forms wait in Answers, unanswered
