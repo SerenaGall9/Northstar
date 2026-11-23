@@ -563,6 +563,8 @@ function appCard(j) {
     else {
       const needs = rep.needs || [];
       body = `<p>${f.status === 'sent' ? 'Sent to Chrome ' + fmtDate(f.updated_at) + '. Waiting for the page report.' : f.status === 'blocked' ? 'Blocked: ' + esc(rep.blocked || 'the page stopped the fill') : `Filled ${(rep.filled || []).length} field(s) on ${esc(rep.url_host || 'the form')}${rep.pages > 1 ? ` across ${rep.pages} pages` : ''}.`}</p>
+       ${(rep.steps || []).length ? `<details class="more"><summary>What Northstar did (${rep.steps.length})</summary><ul class="bullets">${rep.steps.slice(-12).map(t => `<li>✓ ${esc(t)}</li>`).join('')}</ul></details>` : ''}
+       ${rep.stage === 'final' ? `<p class="tiny"><b>Reached the final page.</b> Check it in Chrome, approve, then press Submit yourself.</p>` : rep.stage === 'blocked' ? `<p class="tiny"><b>Stopped: something needs you.</b> Do it on the page in Chrome, then press Continue application in the Northstar box there.</p>` : ''}
        ${needs.length ? `<b class="tiny">Needs you (${needs.length})</b><ul>${needs.slice(0, 8).map(n => `<li>${esc(n.label)}${n.required ? ' · required' : ''}: ${esc(n.why)}</li>`).join('')}${needs.length > 8 ? `<li>…and ${needs.length - 8} more</li>` : ''}</ul>` : ''}
        ${(rep.attached || []).length ? `<p class="tiny">Attached: ${rep.attached.map(esc).join(', ')}. Check they show on the form.</p>` : ''}
        <div class="actions"><button class="btn sm" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open in Chrome again</button>${appr ? `<button class="btn sm primary" data-act="recordSubmitted" data-arg="${attr(j.id)}">I submitted · record confirmation</button>` : `<button class="btn sm primary" data-act="approveSubmit" data-arg="${attr(j.id)}">Approve submit</button>`}</div>
@@ -705,7 +707,7 @@ function answerRow(a) {
   const fullHtml = !full.trim() ? '<i>No answer yet</i>' : a.sensitive && !shown ? '••••••' : esc(full).replace(/\n/g, '<br>');
   const waiting = !full.trim(), isDraft = a.draft && !a.confirmed;
   const tags = `${(a.seen || 1) > 1 ? `<span class="tag blue">Seen on ${a.seen} forms</span>` : ''}${isDraft ? '<span class="tag amber">Draft to review</span>' : ''}`;
-  const draftHtml = isDraft ? `<div class="notice" style="margin-top:8px"><b>Suggested by ${a.draft.source === 'match' ? 'Northstar' : 'Claude'}.</b> Based on: ${esc(a.draft.based_on || 'not stated')}.${(a.draft.flags || []).length ? `<div style="margin-top:4px;color:var(--amber)"><b>Check before approving:</b> ${a.draft.flags.map(esc).join('; ')}</div>` : ''}<div class="tiny" style="margin-top:4px">Not used on forms or in packs until you approve it.</div></div>` : '';
+  const draftHtml = isDraft ? `<div class="notice" style="margin-top:8px"><b>${a.draft.source === 'form' ? 'You typed this on a form.' : `Suggested by ${a.draft.source === 'match' ? 'Northstar' : 'Claude'}.`}</b> Based on: ${esc(a.draft.based_on || 'not stated')}.${(a.draft.flags || []).length ? `<div style="margin-top:4px;color:var(--amber)"><b>Check before approving:</b> ${a.draft.flags.map(esc).join('; ')}</div>` : ''}<div class="tiny" style="margin-top:4px">Not used on forms or in packs until you approve it.</div></div>` : '';
   const ns = waiting && a.no_suggestion;
   const suggestHtml = waiting ? (noDraft(a) ? '<div class="tiny" style="margin-top:6px">Pay, diversity and private details are never suggested. Please fill this one in yourself.</div>'
     : ns ? `<div class="notice warn" style="margin-top:8px"><b>Claude didn't suggest an answer, on purpose.</b> ${esc(ns.reason || "Your documents don't cover this question.")}${ns.flags.length ? `<div class="tiny" style="margin-top:4px">Not backed up by your documents: ${ns.flags.map(esc).join('; ')}</div>` : ''}<div class="tiny" style="margin-top:4px">Please answer it yourself with Edit.</div></div>` : '') : '';
@@ -1600,6 +1602,21 @@ window.addEventListener('message', async e => {
     for (const n of m.report.needs || []) { const ex = n.kind === 'unknown' && n.label && S.answers.find(a => a.key === norm(n.label).slice(0, 80)); if (ex && !(ex.answer || '').trim()) ex.seen = (ex.seen || 1) + 1; }
     for (const n of m.report.needs || []) if (n.kind === 'unknown' && n.label && !S.answers.some(a => a.key === norm(n.label).slice(0, 80)) && !(S.answer_merged || []).some(m => m.key === norm(n.label).slice(0, 80))) S.answers.push({ key: norm(n.label).slice(0, 80), question: n.label, answer: '', kind: 'question', confirmed: false, scope: 'both', seen: 1, created_at: now() });
     await save(); renderAll();
+  }
+  if (m.type === 'fill-learned') {
+    // Answers you typed on an employer form for questions Northstar had no answer for: offered as drafts, used only once you approve them
+    const f = S.fills.find(x => x.id === m.fill_id); const j = f && job(f.job_id);
+    let n = 0;
+    for (const l of m.learned || []) {
+      if (!l || !l.label || !l.value) continue;
+      const key = norm(l.label).slice(0, 80);
+      let a = S.answers.find(x => x.key === key);
+      if (a && a.confirmed && (a.answer || '').trim()) continue;
+      if (!a) { a = { key, question: l.label, kind: 'question', scope: 'both', seen: 1, created_at: now() }; S.answers.push(a); }
+      a.answer = String(l.value).slice(0, 1000); a.confirmed = false; delete a.no_suggestion;
+      a.draft = { source: 'form', based_on: `what you typed on the ${j ? j.company + ' ' : ''}form${m.host ? ' (' + m.host + ')' : ''}`, flags: [], at: now() }; a.updated_at = now(); n++;
+    }
+    if (n) { await save(); renderAll(); toast(`${n} answer${n > 1 ? 's' : ''} you typed on the form ${n > 1 ? 'are' : 'is'} waiting in Career profile › Answers for you to approve.`); }
   }
   if (m.type === 'submit-unlocked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && !approvalFor(f.job_id)) { await recordApproval(f.job_id, 'page'); } }
   if (m.type === 'submit-clicked') { const f = S.fills.find(x => x.id === m.fill_id); if (f) { const j = job(f.job_id); toast(`Submit pressed for ${j.company}. Record the confirmation once the employer shows it.`); go('application'); } }
