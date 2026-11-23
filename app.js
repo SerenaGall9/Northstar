@@ -583,6 +583,8 @@ document.addEventListener('change', e => {
 });
 
 /* ---------- Interviews ---------- */
+// A new prep replaces the old one; the last 3 earlier versions are kept, not printed
+function setPrep(i, md) { if (i.prep_md && i.prep_md.trim() !== md.trim()) i.prep_old = [{ md: i.prep_md, at: i.prep_at || i.updated_at || now() }, ...(i.prep_old || [])].slice(0, 3); i.prep_md = md; i.prep_at = now(); i.updated_at = now(); }
 function renderInterviews() {
   const list = S.interviews.filter(i => visible(job(i.job_id))).sort((a, b) => String(a.when_local).localeCompare(String(b.when_local)));
   const up = list.filter(i => !i.finished), done = list.filter(i => i.finished);
@@ -593,7 +595,7 @@ function interviewCard(i) {
   const j = job(i.job_id) || {};
   const d = i.when_local ? new Date(i.when_local) : null, ok = d && !isNaN(d);
   return `<article class="card interview"><div class="interview-head"><div class="datebox">${ok ? d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }).toUpperCase() : 'DATE TBC'}</div><div style="flex:1;min-width:0"><h3>${esc(j.role || '')}</h3><p>${esc(j.company || '')} · ${esc(i.stage || 'Interview')}${i.outcome ? ' · <b>' + esc(i.outcome) + '</b>' : ''}</p><p>${ok ? esc(d.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })) + ' ' + esc(i.tz || '') : 'Time to confirm'}${i.link ? ` · <a href="${attr(safeUrl(i.link))}" target="_blank" rel="noopener noreferrer">Meeting link ↗</a>` : ''}</p></div></div>
-   <details class="more" style="margin-top:10px"><summary>Interview prep ${i.prep_md ? '' : '(empty)'}</summary>${i.prep_md ? `<div class="docwrap" style="margin-top:8px"><div class="dochead"><span>Prep document</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPrep" data-arg="${attr(i.id)}">⇩ PDF</button><button class="btn sm" data-act="viewPrep" data-arg="${attr(i.id)}">Open</button></span></div><div class="paper">${mdToHtml(prepDoc(i))}</div></div>` : '<p class="tiny">No notes yet.</p>'}</details>
+   <details class="more" style="margin-top:10px"><summary>Interview prep ${i.prep_md ? '' : '(empty)'}</summary>${i.prep_md ? `<div class="docwrap" style="margin-top:8px"><div class="dochead"><span>Prep document</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPrep" data-arg="${attr(i.id)}">⇩ PDF</button><button class="btn sm" data-act="viewPrep" data-arg="${attr(i.id)}">Open</button></span></div><div class="paper">${mdToHtml(prepDoc(i))}</div></div>` : '<p class="tiny">No notes yet.</p>'}${(i.prep_old || []).length ? `<details class="more" style="margin-top:8px"><summary>Earlier prep (${i.prep_old.length}) · not in the PDF</summary>${i.prep_old.map(o => `<div class="tiny" style="margin-top:6px">From ${esc(fmtDate(o.at))}</div><div class="paper">${mdToHtml(o.md)}</div>`).join('')}</details>` : ''}</details>
    <div class="actions"><button class="btn sm" data-act="openInterview" data-arg="|${attr(i.id)}">Edit</button><button class="btn sm" data-act="draftPrep" data-arg="${attr(i.id)}">${apiKey() ? 'Draft prep notes' : 'Prep notes via Claude chat'}</button><button class="btn sm" data-act="recordOutcome" data-arg="${attr(i.id)}">Record outcome</button></div></article>`;
 }
 function prepDoc(i) {
@@ -949,10 +951,10 @@ const ACT = {
   openInterview(arg = '') { const [jid, iid] = String(arg).split('|'); openInterviewForm(jid, iid); },
   async draftPrep(iid) {
     const i = S.interviews.find(x => x.id === iid), j = job(i.job_id);
-    const addPrep = async md => { i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md.trim(); await save(); renderInterviews(); toast('Prep notes added. Edit them any time.'); };
+    const addPrep = async md => { setPrep(i, md.trim()); await save(); renderInterviews(); toast('New prep notes ready. They replace the earlier ones (kept under Earlier prep).'); };
     if (!apiKey()) { chatHandoff({ eyebrow: `${j.company} · ${i.stage || 'Interview'}`, title: 'Prep notes with Claude chat', cloudTitle: 'Make prep notes', prompt: AI.chatPrompt(AI.prepPrompt({ job: j, pack: approvedPack(j.id), interview: i, docs: docs() })), onReply: addPrep, cloud: { kind: 'prep', ref: { interview_id: iid }, title: `Prep notes · ${j.company}` } }); return; }
     busy('Drafting prep notes…');
-    try { const md = await AI.draftPrep({ key: apiKey(), model: model(), job: j, pack: approvedPack(j.id), interview: i, docs: docs() }); i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md; await save(); renderInterviews(); toast('Prep notes added. Edit them any time.'); }
+    try { const md = await AI.draftPrep({ key: apiKey(), model: model(), job: j, pack: approvedPack(j.id), interview: i, docs: docs() }); setPrep(i, md); await save(); renderInterviews(); toast('New prep notes ready. They replace the earlier ones (kept under Earlier prep).'); }
     catch (e) { toast(e.message); } finally { busy(); }
   },
   pdfPrep(iid) { const i = S.interviews.find(x => x.id === iid), j = job(i.job_id) || {}; savePdf(prepDoc(i), `${slug(j.company)}-interview-prep.pdf`, { title: 'Interview prep' }); },
@@ -1286,8 +1288,8 @@ async function applyCloudResult(req, text) {
     const i = S.interviews.find(x => x.id === req.ref.interview_id); if (!i) throw Error('That interview is no longer in Northstar');
     const md = String(text).replace(/^\s*```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/i, '$1').trim();
     if (!md) throw Error('The result is empty');
-    i.prep_md = (i.prep_md ? i.prep_md + '\n\n---\n\n' : '') + md;
-    toast('Prep notes added. Edit them any time.');
+    setPrep(i, md);
+    toast('New prep notes ready. They replace the earlier ones (kept under Earlier prep).');
   }
   req.status = 'done'; req.done_at = now(); req.error = '';
   await save(); renderAll();
