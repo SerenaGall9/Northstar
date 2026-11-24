@@ -543,6 +543,7 @@ function appCol(j) {
   const r = f.report || {};
   if (f.status === 'submit_pressed') return 'signoff';
   if (r.stage === 'final' && !r.required_left) return 'signoff';
+  if (f.reached_final && !r.required_left && !(r.needs || []).some(n => n.required)) return 'signoff'; // reached the final page before; a reload does not undo that
   if (['needs_you', 'blocked'].includes(f.status) || noForm(f) || r.stage === 'blocked' || r.required_left) return 'needs';
   return 'filling';
 }
@@ -597,9 +598,9 @@ function appCard(j) {
       const ck = (ok, t) => `<li class="${ok ? 'ok' : 'todo'}">${t}</li>`;
       body = f.status === 'submit_pressed'
         ? `<p><b>Submit pressed ${esc(fmtDate(f.submit_at || f.updated_at))}.</b> Waiting for the employer's confirmation page${rep.url_host ? ' on ' + esc(rep.url_host) : ''}.</p><div class="actions"><button class="btn sm primary" data-act="recordSubmitted" data-arg="${attr(j.id)}">I see the confirmation · record it</button></div>`
-        : `<ul class="signoff">${ck(rep.stage === 'final', 'Reached the final page')}${ck(!rep.required_left, 'No required field left empty')}${ck(cvOk, 'CV attached')}${ck(clOk, clOk ? 'Cover letter attached' : 'Cover letter not attached (fine if the form had no place for it)')}${ck((rep.filled || []).length > 0, `${(rep.filled || []).length} answers filled from your confirmed answers`)}</ul>
+        : `<ul class="signoff">${ck(rep.stage === 'final' || !!f.reached_final, 'Reached the final page')}${ck(!rep.required_left, 'No required field left empty')}${ck(cvOk, 'CV attached')}${ck(clOk, clOk ? 'Cover letter attached' : 'Cover letter not attached (fine if the form had no place for it)')}${ck((rep.filled || []).length > 0, `${(rep.filled || []).length} answers filled from your confirmed answers`)}</ul>
           ${(rep.steps || []).length ? `<details class="more"><summary>What Northstar did (${rep.steps.length})</summary><ul class="bullets">${rep.steps.slice(-12).map(t => `<li>✓ ${esc(t)}</li>`).join('')}</ul></details>` : ''}
-          ${appr ? `<p class="tiny"><b>Approved.</b> Northstar presses Submit on the employer page now.</p>` : `<label class="checkline"><input type="checkbox" class="so-ok" data-arg="${attr(j.id)}"> I checked every answer and document on the employer page</label><div class="actions"><button class="btn sm" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open the page</button><button class="btn sm primary" data-act="signOff" data-arg="${attr(j.id)}">Approve and submit</button></div>`}`;
+          ${appr ? `<p class="tiny"><b>Approved.</b> Northstar presses Submit as soon as the final page is open in Chrome.</p><div class="actions"><button class="btn sm" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open the page</button></div>` : `<label class="checkline"><input type="checkbox" class="so-ok" data-arg="${attr(j.id)}"> I checked every answer and document on the employer page</label><div class="actions"><button class="btn sm" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open the page</button><button class="btn sm primary" data-act="signOff" data-arg="${attr(j.id)}">Approve and submit</button></div>`}`;
     }
     else {
       const needs = rep.needs || [];
@@ -1704,6 +1705,10 @@ window.addEventListener('message', async e => {
   if (m.type === 'fill-report') {
     const f = S.fills.find(x => x.id === m.fill_id); if (!f) return;
     if (m.report && m.report.url_host === location.host) return; // a Northstar page opened in the fill tab is not an employer form
+    // A page reload or a reopened tab sends an empty report: never let it wipe progress already made
+    const empty = r => !r || (!(r.filled || []).length && !(r.attached || []).length && !(r.needs || []).length && r.stage !== 'final');
+    if (empty(m.report) && f.report && !empty(f.report)) { f.report = { ...f.report, steps: (m.report.steps || []).length ? m.report.steps : f.report.steps }; f.updated_at = now(); await save(); renderAll(); return; }
+    if (m.report.stage === 'final' && !m.report.required_left) f.reached_final = now();
     f.report = m.report; f.updated_at = now();
     if (f.status !== 'submit_pressed') f.status = m.report.blocked ? 'blocked' : (m.report.needs || []).length ? 'needs_you' : 'filled';
     // new questions from forms wait in Answers, unanswered
