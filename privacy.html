@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Northstar privacy</title>
+<style>
+:root{--bg:#f6f7f3;--ink:#1e2924;--muted:#5f6b63;--line:#e2e6de;--brand:#153d32}
+@media (prefers-color-scheme:dark){:root{--bg:#121815;--ink:#e6ece8;--muted:#a3b0a8;--line:#2a332e;--brand:#c8eda6}}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:720px;margin:0 auto;padding:32px 16px 64px}
+h1{color:var(--brand);font-size:28px;margin:0 0 4px}h2{font-size:19px;margin:28px 0 6px}
+p,li{color:var(--ink)}small{color:var(--muted)}ul{padding-left:20px}
+</style>
+</head>
+<body><main>
+<h1>Northstar privacy</h1>
+<small>Covers the Northstar app and the Northstar Autofill Chrome extension. Last updated 23 November 2026.</small>
+
+<h2>The short version</h2>
+<p>Your job-search data stays on your own devices. The people who make Northstar do not collect it, cannot see it, and never sell or share it. Nothing is used for advertising.</p>
+
+<h2>What the Chrome extension does with your data</h2>
+<ul>
+<li><b>Filling forms.</b> When you press Fill in Northstar, the app hands the extension your contact details, confirmed answers and approved documents for that one application. The extension types them into the employer's form in your browser. It never presses Submit.</li>
+<li><b>Where it is kept.</b> That fill package is kept in your browser's extension storage only until you record the application as submitted or cancel it. Then it is deleted.</li>
+<li><b>Reading job ads.</b> When you press Add role with a link, the extension opens that one page without your cookies and passes its text to the app.</li>
+<li><b>Cloud runner (optional).</b> If you set up your own Claude routine, the extension sends a request to Anthropic's routine address only when you press a Northstar button, using your own routine token. The token is kept in your browser and never shown to web pages.</li>
+<li><b>Fill reports</b> hold field labels only, never your answers.</li>
+<li>The extension does not track your browsing, does not record pages you visit, and sends nothing to the Northstar makers.</li>
+</ul>
+
+<h2>Why it asks to run on all websites</h2>
+<p>Job application forms live on many different sites (company career pages, Greenhouse, Lever, Workday and others). The extension needs access to the page you are applying on so it can fill it. It only acts on a page when you started a fill from Northstar, or pressed a button in its menu on that page. On every other page it does nothing.</p>
+
+<h2>The Northstar app</h2>
+<ul>
+<li>Your tracker, CV, answers and documents are stored in your browser on each device.</li>
+<li>If you turn on sync, your data is locked (encrypted) on your device before it leaves, so the storage service only holds scrambled text.</li>
+<li>Assistant features send only what that action needs (for example your CV and one job ad) to Claude, through your own Claude account or your own API key, and only when you press the button.</li>
+</ul>
+
+<h2>Deleting your data</h2>
+<p>Remove the extension to delete everything it holds. In the app, Career profile › Data &amp; connections › Erase everything on this device deletes the data on that device.</p>
+
+<h2>Questions</h2>
+<p>Use the support link on the extension's Chrome Web Store page.</p>
+</main></body>
+</html>

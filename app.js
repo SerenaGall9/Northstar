@@ -693,15 +693,21 @@ function renderProfile() {
       <p class="tiny">Each button sends one request with only what that action needs (for example your Master CV and one job ad). Nothing runs in the background.</p><p class="tiny"><b>No key?</b> Every assistant button still works through your Claude subscription: it gives you a prompt to paste into a Claude chat, and you paste the reply back.</p></div>
      <div class="card panel"><div class="panel-head"><div><h2>Cloud runner</h2><small>Your Northstar routine does assistant steps on your Claude subscription</small></div><span class="tag ${ext.runner && ghRepo() && ghToken() ? 'green' : 'amber'}">${ext.runner && ghRepo() && ghToken() ? 'Ready' : `${[ext.runner, ghRepo(), ghToken()].filter(Boolean).length} of 3 done`}</span></div>
       <ul class="checks" style="list-style:none;padding:0;margin:0 0 10px">
-       <li>${ext.runner ? '✅' : '⬜'} <b>Starting runs</b>: ${ext.runner ? 'on, set in the extension menu' : ext.ready ? 'paste the routine\'s Fire URL and token in the <b>extension menu</b> (puzzle icon › Northstar Autofill)' : 'install the Chrome extension first'}</li>
+       <li>${ext.runner ? '✅' : '⬜'} <b>Starting runs</b>: ${ext.runner ? 'on, the extension has your runner' : runnerSaved() ? (ext.ready ? 'saved here, sending to the extension…' : 'saved here; it goes to the extension when the extension is connected') : 'paste the routine\'s Fire URL and token below'}</li>
        <li>${ghRepo() ? '✅' : '⬜'} <b>Results repository</b>: ${ghRepo() ? esc(ghRepo()) : 'type it below'}</li>
        <li>${ghToken() ? '✅' : '⬜'} <b>GitHub token</b>: ${ghToken() ? 'saved on this device' : 'paste it below'}</li></ul>
+      <div class="formgrid"><div class="formfield full"><label>Runner Fire URL (from the routine's API trigger)</label><input id="rn-url" value="${attr(rnGet('main').url || '')}" placeholder="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire"></div>
+      <div class="formfield full"><label>Runner token (this computer only, never synced or exported)</label><input id="rn-token" type="password" autocomplete="off" value="${rnGet('main').token ? '••••••••' : ''}" placeholder="sk-ant-oat01-…"></div></div>
+      <details style="margin:6px 0 10px"><summary class="tiny"><b>Optional: a Sonnet runner for searches and Gmail</b></summary><div class="formgrid"><div class="formfield full"><label>Sonnet runner Fire URL</label><input id="rn-url-fast" value="${attr(rnGet('fast').url || '')}" placeholder="https://api.anthropic.com/v1/claude_code/routines/trig_…/fire"></div>
+      <div class="formfield full"><label>Sonnet runner token</label><input id="rn-token-fast" type="password" autocomplete="off" value="${rnGet('fast').token ? '••••••••' : ''}" placeholder="sk-ant-oat01-…"></div></div></details>
       <div class="formgrid"><div class="formfield"><label>Results repository (owner/name)</label><input id="gh-repo" value="${attr(ghRepo())}" placeholder="e.g. SerenaGall9/northstar-results"></div>
       <div class="formfield"><label>GitHub token (this device only, never exported)</label><input id="gh-token" type="password" autocomplete="off" value="${ghToken() ? '••••••••' : ''}" placeholder="github_pat_…"></div></div>
-      <div class="actions"><button class="btn primary sm" data-act="saveRunner">Save</button>${ghToken() ? '<button class="btn sm danger" data-act="clearRunner">Remove token</button>' : ''}</div>
+      <div class="actions"><button class="btn primary sm" data-act="saveRunner">Save</button>${ghToken() ? '<button class="btn sm danger" data-act="clearRunner">Remove GitHub token</button>' : ''}${runnerSaved() ? '<button class="btn sm danger" data-act="clearRunnerFire">Remove runner</button>' : ''}</div>
+      <p class="tiny">Save sends the runner to the Chrome extension for you. If the extension is reinstalled or updated, Northstar sends it again by itself.</p>
       ${local.get('gh_problem', '') ? `<div class="notice warn">${esc(local.get('gh_problem', ''))}</div>` : ''}</div>
      <div class="card panel"><div class="panel-head"><div><h2>Chrome extension</h2><small>Fills forms from your approved pack. Never submits without your approval.</small></div><span class="tag ${ext.ready ? 'green' : 'amber'}">${ext.ready ? 'Connected' : 'Not connected'}</span></div>
-      <ul class="bullets"><li>Install: chrome://extensions → Developer mode → Load unpacked → choose the <b>extension</b> folder.</li><li>If this page is not on localhost, open the extension's menu on this page and press <b>Trust this Northstar page</b>.</li><li>Phones: form filling is not available, everything else works.</li></ul></div>
+      ${STORE_URL ? `<div class="actions"><a class="btn primary sm" href="${attr(STORE_URL)}" target="_blank" rel="noopener noreferrer">Add the Chrome extension ↗</a></div><ul class="bullets"><li>Press <b>Add to Chrome</b> on the page that opens, then come back here. It connects by itself and updates by itself.</li><li>Phones: form filling is not available, everything else works.</li></ul>`
+        : `<ul class="bullets"><li>Install: chrome://extensions → Developer mode → Load unpacked → choose the <b>extension</b> folder.</li><li>On this website it connects by itself. On another address, open the extension's menu there and press <b>Trust this Northstar page</b>.</li><li>Phones: form filling is not available, everything else works.</li></ul>`}</div>
      ${syncPanelHtml()}
      <div class="card panel"><div class="panel-head"><div><h2>Your data</h2><small>${syncOn() ? 'Saved in this browser and synced to your other devices' : 'Saved in this browser on this device only'}</small></div></div>
       <div class="actions"><button class="btn sm" data-act="importSetup">Import setup file</button><button class="btn sm" data-act="exportSync">⇩ Export sync file</button><button class="btn sm" data-act="importSync">Import sync file</button><button class="btn sm" data-act="exportCsv">⇩ Roles as CSV</button></div>
@@ -869,14 +875,18 @@ const ACT = {
     await backup('before restoring a safety copy', true);
     const keepBase = (await dbGet('state'))?.updated_at || null; S = { ...blankState(), ...b.state }; baseAt = keepBase; await save(); renderAll(); toast('Safety copy restored');
   },
-  saveRunner() {
+  async saveRunner() {
+    const fire = saveRunnerFire(); if (fire === false) return;
+    if (fire) { renderProfile(); if (ext.ready) { const r = await pushRunner(true); if (!r.ok) return; toast('Runner sent to the Chrome extension.'); } else toast('Runner saved. It goes to the Chrome extension when the extension is connected.'); }
     if (!saveRunnerField('gh-repo') || !saveRunnerField('gh-token')) return;
+    if (fire && !ghRepo() && !ghToken()) return;
     renderProfile();
     if (!ghRepo()) { toast('Token saved. Now type the repository name, for example SerenaGall9/northstar-results, and press Save.'); return; }
     if (!ghToken()) { toast('Repository saved. Now paste the read-only token and press Save.'); return; }
     toast('Saved on this device: ' + ghRepo() + ' with its read-only token'); pollCloud();
   },
   clearRunner() { local.set('gh_token', ''); renderProfile(); },
+  async clearRunnerFire() { local.set('rn_main', null); local.set('rn_fast', null); renderProfile(); toast('Runner removed from Northstar. To remove it from the extension too, press Remove in the extension menu.'); },
   cloudPaste(id) {
     const req = (S.cloud || []).find(r => r.id === id); if (!req) return;
     openModal(`<div class="eyebrow">Northstar runner</div><h2>${esc(req.title)}</h2><p class="tiny">If the result has not arrived by itself, open the run with Watch, copy the runner's final answer and paste it here.</p><textarea id="cp-text" class="field" style="width:100%;min-height:180px" placeholder="Paste the runner's answer"></textarea><div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="cp-use">Use this result</button></div>`, 'wide');
@@ -1047,7 +1057,7 @@ const ACT = {
     $('mv-save').onclick = async () => { const body = editorValues().master; S.master_versions.unshift({ created_at: now(), note: $('mv-note').value.trim(), previous: S.docs.master_cv }); S.master_versions = S.master_versions.slice(0, 10); S.docs.master_cv = body; await save(); closeModal(); renderProfile(); toast('New Master CV version saved'); };
   },
   openSource(name) { const titles = { rubric: 'Fit score rubric', playbook: 'Cover letter playbook', search_profile: 'Search profile', workflow_rules: 'Workflow rules', master_cv: 'Master CV' }; docModal({ eyebrow: 'Read-only source', title: titles[name] || name, md: S.docs[name] || '*Not imported yet.*', filename: `${name}.pdf` }); },
-  async saveKey() { if (/^sk-ant-oat/.test($('api-key').value.trim())) { toast('That is a runner token, not an API key. Paste it in the extension menu under Cloud runner instead.'); return; } local.set('api_key', $('api-key').value.trim()); local.set('model', $('api-model').value); setStatus(); renderProfile(); toast('Assistant settings saved on this device'); },
+  async saveKey() { if (/^sk-ant-oat/.test($('api-key').value.trim())) { toast('That is a runner token, not an API key. Paste it under Cloud runner instead.'); return; } local.set('api_key', $('api-key').value.trim()); local.set('model', $('api-model').value); setStatus(); renderProfile(); toast('Assistant settings saved on this device'); },
   async clearKey() { local.set('api_key', ''); setStatus(); renderProfile(); },
   importSetup: () => pickFile('.json', importSetup),
   importSync: () => pickFile('.json', importSync),
@@ -1410,6 +1420,42 @@ function saveRunnerField(id) {
   return true;
 }
 document.addEventListener('change', e => { if (e.target && (e.target.id === 'gh-repo' || e.target.id === 'gh-token')) saveRunnerField(e.target.id); });
+
+// The runner's Fire URL and token are kept on this computer (never synced or exported) and handed to the Chrome extension,
+// so nobody pastes them in the extension menu, and a reinstalled or updated extension gets them back by itself.
+// Set STORE_URL once the extension is on the Chrome Web Store.
+const STORE_URL = '';
+const FIRE_RE = /^https:\/\/api\.anthropic\.com\/v1\/claude_code\/routines\/trig_[A-Za-z0-9]+\/fire$/, RTOKEN_RE = /^sk-ant-oat01-[A-Za-z0-9_-]{20,}$/;
+const rnGet = slot => local.get(slot === 'fast' ? 'rn_fast' : 'rn_main', null) || {};
+const runnerSaved = () => !!(rnGet('main').url && rnGet('main').token);
+// Returns true when something new was saved, null when the fields were left empty, false on a mistake.
+function saveRunnerFire() {
+  let changed = null;
+  for (const [slot, u, t, name] of [['main', 'rn-url', 'rn-token', 'Runner'], ['fast', 'rn-url-fast', 'rn-token-fast', 'Sonnet runner']]) {
+    if (!$(u)) continue;
+    const url = $(u).value.trim(), tv = $(t).value.trim(), cur = rnGet(slot);
+    const token = tv === '••••••••' ? cur.token : tv;
+    if (!url && !tv) { if (cur.url) { local.set(slot === 'fast' ? 'rn_fast' : 'rn_main', null); changed = true; } continue; }
+    if (!FIRE_RE.test(url)) { toast(`${name}: paste the Fire URL exactly as the routine page shows it.`); return false; }
+    if (!RTOKEN_RE.test(token || '')) { toast(`${name}: paste the whole token (it starts with sk-ant-oat01-).`); return false; }
+    if (slot === 'fast' && url === rnGet('main').url) { toast('The Sonnet runner needs the Fire URL of your second routine.'); return false; }
+    if (url !== cur.url || token !== cur.token) { local.set(slot === 'fast' ? 'rn_fast' : 'rn_main', { url, token }); changed = true; }
+  }
+  if (changed && !rnGet('main').url && rnGet('fast').url) { toast('Add your main runner first. The Sonnet runner is an extra.'); return false; }
+  return changed;
+}
+// Sends the saved runner to the extension. Automatic sends happen only when the extension has no runner yet.
+async function pushRunner(loud) {
+  if (!ext.ready || !runnerSaved()) return { ok: false };
+  const m = rnGet('main'), f = rnGet('fast');
+  try {
+    const r = await extRequest({ type: 'runner-set', main: m, fast: f.url && f.token ? f : null });
+    if (r.configured !== undefined) ext.runner = !!r.configured;
+    if (!r.ok) { const e = Object.values(r.results || {}).find(x => !x.ok); if (loud) toast('The extension did not take the runner: ' + (e?.error || r.error || 'unknown reason')); return { ok: false }; }
+    if (S) renderAll();
+    return { ok: true };
+  } catch (e) { if (loud) toast(/Unknown request|did not answer/.test(e.message) ? 'This extension is too old to receive the runner. Update it, or paste the runner in the extension menu.' : e.message); return { ok: false }; }
+}
 document.addEventListener('input', e => { const t = e.target; if (!t) return; if (t.id === 'gh-token') saveRunnerField('gh-token'); if (t.id === 'gh-repo' && /^[\w.-]+\/[\w.-]+$/.test(t.value.trim())) local.set('gh_repo', t.value.trim()); });
 
 async function renderBackups() {
@@ -1645,7 +1691,15 @@ window.addEventListener('message', async e => {
   const m = e.data || {};
   if (m.ns !== 'northstar-ext') return;
   if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
-  if (m.type === 'ready') { const was = ext.ready; ext.ready = true; ext.version = m.version || ''; extRequest({ type: 'runner' }).then(r => { const had = ext.runner; ext.runner = !!r.configured; if (had !== ext.runner && S) renderAll(); }).catch(() => { }); if (!was && S) renderAll(); return; }
+  if (m.type === 'ready') { const was = ext.ready; ext.ready = true; ext.version = m.version || ''; extRequest({ type: 'runner' }).then(r => { const had = ext.runner; ext.runner = !!r.configured; if (!ext.runner && runnerSaved()) pushRunner(false); else if (had !== ext.runner && S) renderAll(); }).catch(() => { }); if (!was && S) renderAll(); return; }
+  if (m.type === 'runner-copy') {
+    // Sent only when you press "Copy to Northstar" in the extension menu.
+    const okv = v => v && FIRE_RE.test(v.url || '') && RTOKEN_RE.test(v.token || '');
+    if (!okv(m.main)) return;
+    local.set('rn_main', { url: m.main.url, token: m.main.token }); local.set('rn_fast', okv(m.fast) && m.fast.url !== m.main.url ? { url: m.fast.url, token: m.fast.token } : null);
+    if (S) { renderAll(); toast('Runner copied from the extension. Northstar keeps it on this computer.'); }
+    return;
+  }
   if (!S) return;
   if (m.type === 'fill-report') {
     const f = S.fills.find(x => x.id === m.fill_id); if (!f) return;
