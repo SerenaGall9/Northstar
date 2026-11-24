@@ -174,7 +174,7 @@ details.rcard>summary::-webkit-details-marker{display:none}
 .checkline{font-size:14.5px;display:flex;gap:8px;align-items:flex-start;line-height:1.4}
 .checkline input{accent-color:var(--green);margin:3px 0 0;width:17px;height:17px;flex:0 0 auto}
 /* applications */
-.kanban{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.kanban{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .column{background:var(--side);border-radius:14px;padding:12px;min-height:200px;border:1px solid var(--line)}
 .colhead{font-size:15px;font-weight:850;display:flex;justify-content:space-between;margin:2px 2px 10px}
 .application{padding:13px;border-radius:12px;background:var(--panel);border:1px solid var(--line);margin-bottom:9px}
@@ -277,3 +277,18 @@ details.ansrow[open] .ansprev{display:none}
 .ansfull{padding:0 0 12px;font-size:14.5px;overflow-wrap:anywhere}
 .anstags{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0}
 .stsel{font:inherit;font-size:13px;font-weight:700;border:1px solid var(--line);border-radius:20px;padding:4px 8px;background:var(--mint);color:var(--green);max-width:100%;cursor:pointer}
+
+/* v34 applications: cards never spill, sign-off checklist, applied table */
+.application{min-width:0;overflow-wrap:anywhere}
+.application .btn{white-space:normal;max-width:100%;text-align:center;line-height:1.25}
+.application .actions .btn{flex:1 1 auto}
+.colsub{margin:-4px 2px 10px}
+ul.signoff{list-style:none;margin:8px 0;padding:0}ul.signoff li{position:relative;padding-left:22px;margin:4px 0;font-size:13.5px;color:var(--muted)}
+ul.signoff li.ok::before{content:"✓";position:absolute;left:3px;color:#24624b;font-weight:800}ul.signoff li.todo::before{content:"○";position:absolute;left:3px;color:#b07a1e;font-weight:800}
+.needgroup{padding:8px 0;border-top:1px solid var(--line)}.needgroup:first-of-type{border-top:0}.needgroup ul{margin:4px 0 0 18px;padding:0;font-size:13.5px;color:var(--muted)}
+.tablewrap{overflow-x:auto}
+table.applied{width:100%;border-collapse:collapse;font-size:14px}
+table.applied th{text-align:left;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line)}
+table.applied td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+table.applied td.acts{white-space:nowrap}table.applied td.acts .btn{margin:0 4px 4px 0}
+@media(max-width:700px){table.applied th:nth-child(4),table.applied td:nth-child(4){display:none}}

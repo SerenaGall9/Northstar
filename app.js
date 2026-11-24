@@ -536,15 +536,43 @@ function claimBox(p, c, i) {
 }
 
 /* ---------- Applications ---------- */
+// Applications flow (Sere, 23 Nov): Filling in -> Needs your input -> Final sign-off. Submitted ones leave the board
+// for the Applied table under it.
+function appCol(j) {
+  const f = activeFill(j.id); if (!f || ['pending', 'sent'].includes(f.status)) return 'filling';
+  const r = f.report || {};
+  if (f.status === 'submit_pressed') return 'signoff';
+  if (r.stage === 'final' && !r.required_left) return 'signoff';
+  if (['needs_you', 'blocked'].includes(f.status) || noForm(f) || r.stage === 'blocked' || r.required_left) return 'needs';
+  return 'filling';
+}
 function renderApps() {
-  const cols = [['needs', 'Needs your input'], ['ready', 'Ready to fill'], ['active', 'Filled · check it'], ['submitted', 'Submitted']];
-  const all = S.jobs.filter(j => ['application', 'submitted', 'interview'].includes(j.stage) && visible(j));
-  const col = j => { if (j.stage !== 'application') return 'submitted'; const f = activeFill(j.id); if (!f || f.status === 'pending') return 'ready'; if (['needs_you', 'blocked'].includes(f.status) || noForm(f)) return 'needs'; return 'active'; };
-  $('board').innerHTML = cols.map(([k, t]) => { const r = all.filter(j => col(j) === k); return `<div class="column"><div class="colhead">${t}<span class="tag gray">${r.length}</span></div>${collapsible(r.map(appCard), 6, 'col-' + k) || '<div class="tiny">No roles at this stage.</div>'}</div>`; }).join('');
+  const cols = [['filling', 'Filling in', 'Opens each approved application in Chrome and fills it until something needs you.'], ['needs', 'Needs your input', 'Do these on the employer pages. Each one carries on by itself when you finish.'], ['signoff', 'Final sign-off', 'Check, then approve one application at a time. Northstar then presses Submit.']];
+  const live = S.jobs.filter(j => j.stage === 'application' && visible(j));
+  $('board').innerHTML = cols.map(([k, t, sub]) => { const r = live.filter(j => appCol(j) === k); return `<div class="column"><div class="colhead">${t}<span class="tag gray">${r.length}</span></div><div class="tiny colsub">${sub}</div>${collapsible(r.map(appCard), 6, 'col-' + k) || '<div class="tiny">Nothing here.</div>'}</div>`; }).join('');
+  // everything Needs your input is waiting on, in one list
+  const waiting = live.filter(j => appCol(j) === 'needs');
+  $('needs-all').innerHTML = waiting.length ? `<div class="card panel"><div class="panel-head"><div><h2>Everything waiting on you (${waiting.reduce((n, j) => n + ((activeFill(j.id)?.report?.needs || []).length || 1), 0)})</h2><small>Across ${waiting.length} application${waiting.length === 1 ? '' : 's'}. Do them on each employer page; each application carries on by itself once its page is done.</small></div></div>
+    ${waiting.map(j => { const f = activeFill(j.id), ns = f?.report?.needs || []; return `<div class="needgroup"><b>${esc(j.company)}</b> <span class="tiny">${esc(j.role)}</span><ul>${ns.length ? ns.map(n => `<li>${esc(n.label)}${n.required ? ' · required' : ''}: ${esc(n.why)}</li>`).join('') : `<li>${esc(f?.report?.blocked || 'Open the page and press its Apply button')}</li>`}</ul></div>`; }).join('')}</div>` : '';
+  // Applied table
+  const applied = S.jobs.filter(j => (['submitted', 'interview'].includes(j.stage) || (j.stage === 'closed' && j.submitted_at)) && visible(j)).sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
+  $('applied').innerHTML = `<div class="card panel"><div class="panel-head"><div><h2>Applied (${applied.length})</h2><small>Submitted applications, newest first</small></div></div>${applied.length ? `<div class="tablewrap"><table class="applied"><thead><tr><th>Role</th><th>Company</th><th>Submitted</th><th>Reference</th><th>Status</th><th></th></tr></thead><tbody>${applied.map(j => `<tr><td>${esc(j.role)}</td><td>${esc(j.company)}</td><td>${j.submitted_at ? esc(fmtDate(j.submitted_at, false)) : '—'}</td><td>${j.receipt ? esc(j.receipt) + (j.receipt_verified ? ' ✓' : '') : '<span class="tiny">Not recorded</span>'}</td><td>${esc(j.stage === 'interview' ? 'Interview' : j.stage === 'closed' ? (j.outcome || 'Closed') : (j.outcome || 'Awaiting response'))}</td><td class="acts">${j.receipt ? '' : `<button class="btn sm" data-act="recordSubmitted" data-arg="${attr(j.id)}">Add reference</button>`}${j.stage === 'submitted' ? `<button class="btn sm" data-act="openInterview" data-arg="${attr(j.id)}">＋ Interview</button><button class="btn sm danger" data-act="closeJob" data-arg="${attr(j.id)}">Close</button>` : j.stage === 'interview' ? `<button class="btn sm" data-act="go" data-arg="interview">Open interview</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="tiny">Nothing submitted yet.</div>'}</div>`;
   $('app-notice').innerHTML = ext.ready
-    ? 'Chrome extension connected. Filling opens the employer form in a new tab and fills only confirmed answers and your approved documents. Submit stays locked on that page until you approve this one application here.'
+    ? `Chrome extension connected. Approved applications open in Chrome by themselves, up to 5 at a time, and fill only confirmed answers and your approved documents. <label class="checkline" style="display:inline-flex;margin-left:8px"><input type="checkbox" data-act="toggleAutoOpen" ${S.profile.auto_open === false ? '' : 'checked'}> Open them automatically</label>`
     : isMobile() ? 'Form filling needs Chrome on a computer with the Northstar extension. On this phone you can review, approve and record submissions.'
       : 'Chrome extension not connected. Install it from the extension folder (see README), then reload this page. Fill requests stay queued until then.';
+  autoOpen();
+}
+// Up to 5 applications filling at once; new approved ones start by themselves while the app is open in Chrome
+let autoOpenAt = 0;
+function autoOpen() {
+  if (!ext.ready || S.profile.auto_open === false || Date.now() - autoOpenAt < 20000) return;
+  const live = S.jobs.filter(j => j.stage === 'application' && visible(j));
+  const busy = live.filter(j => { const f = activeFill(j.id); return f && !['pending'].includes(f.status) && appCol(j) !== 'signoff'; }).length;
+  const start = live.filter(j => { const f = activeFill(j.id); return (!f || f.status === 'pending') && approvedPack(j.id) && (j.apply_url || j.job_url); }).slice(0, Math.max(0, 5 - busy)).map(j => j.id);
+  if (!start.length) return;
+  autoOpenAt = Date.now();
+  setTimeout(() => queueFills(start), 300);
 }
 // The page opened but nothing was filled or attached: usually a job listing (LinkedIn) where the form only opens after Apply / Easy Apply
 const noForm = f => !!f && !['pending', 'sent', 'blocked'].includes(f.status) && !!f.report && !(f.report.filled || []).length && !(f.report.attached || []).length && !(f.report.needs || []).length;
@@ -556,7 +584,7 @@ function appCard(j) {
       : `<p>Submitted ${esc(fmtDate(j.submitted_at, false))}. ${j.receipt ? 'Reference: ' + esc(j.receipt) + (j.receipt_verified ? ' (verified)' : '') : 'No reference recorded.'}</p><div class="actions"><span class="tag gray">${esc(j.outcome || 'Awaiting response')}</span><button class="btn sm" data-act="openInterview" data-arg="${attr(j.id)}">＋ Interview</button><button class="btn sm danger" data-act="closeJob" data-arg="${attr(j.id)}">Mark Closed</button></div>`;
   } else {
     const url = `<input class="field" placeholder="Application form link" value="${attr(j.apply_url || j.job_url || '')}" data-change="applyUrl" data-arg="${attr(j.id)}">`;
-    if (!f) body = `<p>Approved pack v${p ? p.version : '?'} is ready. Filling starts only when you choose.</p>${url}<label class="checkline"><input type="checkbox" class="batchpick" value="${attr(j.id)}"> Include in the next batch</label><div class="actions"><button class="btn sm primary" data-act="fillOne" data-arg="${attr(j.id)}">Fill this one now</button></div>`;
+    if (!f) body = `<p>Approved pack v${p ? p.version : '?'} is ready. ${ext.ready && S.profile.auto_open !== false ? 'It opens in Chrome by itself when a place frees up (5 at a time).' : 'Press Start to open it in Chrome.'}</p>${url}<div class="actions"><button class="btn sm primary" data-act="fillOne" data-arg="${attr(j.id)}">Start now</button></div>`;
     else if (f.status === 'pending') body = `<p>Fill request saved ${fmtDate(f.created_at)}. ${ext.ready ? '' : 'Waiting for the Chrome extension; the form has not been touched.'}</p><div class="actions">${ext.ready ? `<button class="btn sm primary" data-act="sendFill" data-arg="${attr(f.id)}">Send to Chrome</button>` : ''}<button class="btn sm" data-act="cancelFill" data-arg="${attr(f.id)}">Cancel request</button></div>`;
     else if (noForm(f) && !appr) {
       const li = /linkedin\./i.test(rep.url_host || '');
@@ -564,15 +592,23 @@ function appCard(j) {
        <p class="tiny">${li ? 'A LinkedIn job page has no form until you press <b>Easy Apply</b> or <b>Apply</b>. Press Open in Chrome again, then press that button on the page: Northstar fills the form as it opens, or follows you to the employer\'s site.' : 'Press Open in Chrome again, then press the Apply button on the page: Northstar fills the form as it opens. If you know the direct link to the form, paste it here first.'}</p>${url}
        <div class="actions"><button class="btn sm primary" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open in Chrome again</button></div>`;
     }
+    else if (appCol(j) === 'signoff') {
+      const att = rep.attached || [], cvOk = att.some(n => /cv/i.test(n)), clOk = att.some(n => /cover/i.test(n));
+      const ck = (ok, t) => `<li class="${ok ? 'ok' : 'todo'}">${t}</li>`;
+      body = f.status === 'submit_pressed'
+        ? `<p><b>Submit pressed ${esc(fmtDate(f.submit_at || f.updated_at))}.</b> Waiting for the employer's confirmation page${rep.url_host ? ' on ' + esc(rep.url_host) : ''}.</p><div class="actions"><button class="btn sm primary" data-act="recordSubmitted" data-arg="${attr(j.id)}">I see the confirmation · record it</button></div>`
+        : `<ul class="signoff">${ck(rep.stage === 'final', 'Reached the final page')}${ck(!rep.required_left, 'No required field left empty')}${ck(cvOk, 'CV attached')}${ck(clOk, clOk ? 'Cover letter attached' : 'Cover letter not attached (fine if the form had no place for it)')}${ck((rep.filled || []).length > 0, `${(rep.filled || []).length} answers filled from your confirmed answers`)}</ul>
+          ${(rep.steps || []).length ? `<details class="more"><summary>What Northstar did (${rep.steps.length})</summary><ul class="bullets">${rep.steps.slice(-12).map(t => `<li>✓ ${esc(t)}</li>`).join('')}</ul></details>` : ''}
+          ${appr ? `<p class="tiny"><b>Approved.</b> Northstar presses Submit on the employer page now.</p>` : `<label class="checkline"><input type="checkbox" class="so-ok" data-arg="${attr(j.id)}"> I checked every answer and document on the employer page</label><div class="actions"><button class="btn sm" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open the page</button><button class="btn sm primary" data-act="signOff" data-arg="${attr(j.id)}">Approve and submit</button></div>`}`;
+    }
     else {
       const needs = rep.needs || [];
       body = `<p>${f.status === 'sent' ? 'Sent to Chrome ' + fmtDate(f.updated_at) + '. Waiting for the page report.' : f.status === 'blocked' ? 'Blocked: ' + esc(rep.blocked || 'the page stopped the fill') : `Filled ${(rep.filled || []).length} field(s) on ${esc(rep.url_host || 'the form')}${rep.pages > 1 ? ` across ${rep.pages} pages` : ''}.`}</p>
        ${(rep.steps || []).length ? `<details class="more"><summary>What Northstar did (${rep.steps.length})</summary><ul class="bullets">${rep.steps.slice(-12).map(t => `<li>✓ ${esc(t)}</li>`).join('')}</ul></details>` : ''}
-       ${rep.stage === 'final' ? `<p class="tiny"><b>Reached the final page.</b> Check it in Chrome, approve, then press Submit yourself.</p>` : rep.stage === 'blocked' ? `<p class="tiny"><b>Stopped: something needs you.</b> Do it on the page in Chrome, then press Continue application in the Northstar box there.</p>` : ''}
-       ${needs.length ? `<b class="tiny">Needs you (${needs.length})</b><ul>${needs.slice(0, 8).map(n => `<li>${esc(n.label)}${n.required ? ' · required' : ''}: ${esc(n.why)}</li>`).join('')}${needs.length > 8 ? `<li>…and ${needs.length - 8} more</li>` : ''}</ul>` : ''}
+       ${rep.stage === 'final' ? `<p class="tiny"><b>Reached the final page</b>, but ${rep.required_left} required field(s) are still empty there.</p>` : rep.stage === 'blocked' ? `<p class="tiny"><b>Stopped: something needs you.</b> Do it on the employer page. Northstar carries on by itself a few seconds after you finish.</p>` : ''}
+       ${needs.length ? `<b class="tiny">Left for you (${needs.length})</b><ul>${needs.slice(0, 8).map(n => `<li>${esc(n.label)}${n.required ? ' · required' : ''}: ${esc(n.why)}</li>`).join('')}${needs.length > 8 ? `<li>…and ${needs.length - 8} more</li>` : ''}</ul>` : ''}
        ${(rep.attached || []).length ? `<p class="tiny">Attached: ${rep.attached.map(esc).join(', ')}. Check they show on the form.</p>` : ''}
-       <div class="actions"><button class="btn sm" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open in Chrome again</button>${appr ? `<button class="btn sm primary" data-act="recordSubmitted" data-arg="${attr(j.id)}">I submitted · record confirmation</button>` : `<button class="btn sm primary" data-act="approveSubmit" data-arg="${attr(j.id)}">Approve submit</button>`}</div>
-       ${appr ? `<p class="tiny">Submit approved for this application only${appr.source === 'page' ? ' (from the employer page)' : ''}. Press Submit yourself on the employer page, then record the confirmation.</p>` : ''}`;
+       <div class="actions"><button class="btn sm" data-act="sendFill" data-arg="${attr(f.id)}" ${ext.ready ? '' : 'disabled'}>Open in Chrome again</button></div>`;
     }
   }
   return `<article class="application"><b>${esc(j.role)}</b><small>${esc(j.company)} · ${esc(j.location || '')} · Fit ${esc(j.fit || '—')}</small>${body}</article>`;
@@ -925,6 +961,15 @@ const ACT = {
 
   /* ----- Application ----- */
   fillOne: id => queueFills([id]),
+  fillAllNow() { autoOpenAt = 0; const before = S.profile.auto_open; S.profile.auto_open = true; autoOpen(); S.profile.auto_open = before; toast('Opening approved applications in Chrome, up to 5 at a time'); },
+  async toggleAutoOpen(_, el) { S.profile.auto_open = !!(el && el.checked); await save(); toast(S.profile.auto_open ? 'Approved applications open by themselves' : 'Applications open only when you press Start filling'); },
+  signOff(id) {
+    const box = document.querySelector(`.so-ok[data-arg="${CSS.escape(id)}"]`);
+    if (!box || !box.checked) { toast('Tick that you checked every answer and document first'); return; }
+    const j = job(id);
+    openModal(`<div class="eyebrow">Final sign-off · one application</div><h2>Submit ${esc(j.company)}?</h2><p><b>${esc(j.role)}</b>, approved pack v${approvedPack(id)?.version}.</p><div class="notice" style="margin-top:10px">Northstar presses the employer's Submit button for this one application now, and only if no required field is empty. Then it records the confirmation the employer shows.</div><div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="so-go">Approve and submit</button></div>`);
+    $('so-go').onclick = async () => { await recordApproval(id, 'signoff'); closeModal(); };
+  },
   fillBatch() { const ids = [...document.querySelectorAll('.batchpick:checked')].map(x => x.value); if (!ids.length) { toast('Tick “Include in the next batch” on the roles you want first'); return; } if (ids.length > 5) { toast('Up to five applications per batch'); return; } queueFills(ids); },
   sendFill: fid => sendFill(fid),
   async cancelFill(fid) { const f = S.fills.find(x => x.id === fid); f.status = 'cancelled'; f.updated_at = now(); await save(); renderAll(); },
@@ -940,7 +985,7 @@ const ACT = {
   recordSubmitted(id) {
     const j = job(id);
     formModal({ eyebrow: `${j.company} · ${j.role}`, title: 'Record the submission', copy: 'Do this after the employer confirms it. The PDFs held by the extension are deleted now; tracker copies are kept through any interview.', fields: [{ id: 'ref', label: 'Confirmation or reference' }, { id: 'date', label: 'Date submitted', type: 'date', value: new Date().toISOString().slice(0, 10) }, { id: 'verified', label: 'I saw the employer’s confirmation', type: 'checkbox' }], onSave: async v => {
-      j.stage = 'submitted'; j.submitted_at = v.date || now(); j.receipt = v.ref.trim(); j.receipt_verified = v.verified; j.updated_at = now();
+      if (j.stage === 'application') j.stage = 'submitted'; j.submitted_at = v.date || now(); j.receipt = v.ref.trim(); j.receipt_verified = v.verified; j.updated_at = now();
       const a = approvalFor(id); if (a) a.used_at = now();
       const f = activeFill(id); if (f) { f.status = 'done'; f.updated_at = now(); extSend({ type: 'clear', fill_id: f.id }); }
       await save(); renderAll(); toast('Submission recorded');
@@ -1606,7 +1651,7 @@ window.addEventListener('message', async e => {
     const f = S.fills.find(x => x.id === m.fill_id); if (!f) return;
     if (m.report && m.report.url_host === location.host) return; // a Northstar page opened in the fill tab is not an employer form
     f.report = m.report; f.updated_at = now();
-    f.status = m.report.blocked ? 'blocked' : (m.report.needs || []).length ? 'needs_you' : 'filled';
+    if (f.status !== 'submit_pressed') f.status = m.report.blocked ? 'blocked' : (m.report.needs || []).length ? 'needs_you' : 'filled';
     // new questions from forms wait in Answers, unanswered
     for (const n of m.report.needs || []) { const ex = n.kind === 'unknown' && n.label && S.answers.find(a => a.key === norm(n.label).slice(0, 80)); if (ex && !(ex.answer || '').trim()) ex.seen = (ex.seen || 1) + 1; }
     for (const n of m.report.needs || []) if (n.kind === 'unknown' && n.label && !S.answers.some(a => a.key === norm(n.label).slice(0, 80)) && !(S.answer_merged || []).some(m => m.key === norm(n.label).slice(0, 80))) S.answers.push({ key: norm(n.label).slice(0, 80), question: n.label, answer: '', kind: 'question', confirmed: false, scope: 'both', seen: 1, created_at: now() });
@@ -1628,7 +1673,15 @@ window.addEventListener('message', async e => {
     if (n) { await save(); renderAll(); toast(`${n} answer${n > 1 ? 's' : ''} you typed on the form ${n > 1 ? 'are' : 'is'} waiting in Career profile › Answers for you to approve.`); }
   }
   if (m.type === 'submit-unlocked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && !approvalFor(f.job_id)) { await recordApproval(f.job_id, 'page'); } }
-  if (m.type === 'submit-clicked') { const f = S.fills.find(x => x.id === m.fill_id); if (f) { const j = job(f.job_id); toast(`Submit pressed for ${j.company}. Record the confirmation once the employer shows it.`); go('application'); } }
+  if (m.type === 'submit-clicked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && f.status !== 'done') { f.status = 'submit_pressed'; f.submit_at = now(); f.updated_at = now(); await save(); renderAll(); toast(`Submit pressed for ${job(f.job_id).company}. Waiting for the employer's confirmation.`); } }
+  if (m.type === 'receipt') {
+    // the employer's confirmation page, read after Northstar pressed Submit: moves the role to Applied
+    const f = S.fills.find(x => x.id === m.fill_id); if (!f || f.status !== 'submit_pressed') return;
+    const j = job(f.job_id); j.stage = 'submitted'; j.submitted_at = now(); j.receipt = m.ref || ''; j.receipt_verified = !!m.ref; j.receipt_text = m.text || ''; j.updated_at = now();
+    const a = approvalFor(j.id); if (a) a.used_at = now();
+    f.status = 'done'; f.updated_at = now(); extSend({ type: 'clear', fill_id: f.id });
+    await save(); renderAll(); toast(`${j.company}: application confirmed${m.ref ? ' · reference ' + m.ref : ''}. Moved to Applied.`);
+  }
 });
 function pingExt() { window.postMessage({ ns: 'northstar-app', type: 'ping' }, location.origin); }
 async function recordApproval(jid, source) {
@@ -1636,7 +1689,7 @@ async function recordApproval(jid, source) {
   S.approvals.push({ id: uid('a'), job_id: jid, pack_id: p.id, at: now(), source });
   const f = activeFill(jid); if (f) extSend({ type: 'approve', fill_id: f.id });
   await save(); renderAll();
-  toast(source === 'page' ? 'Submit unlocked on the employer page and recorded here for this one application.' : 'Submit approved for this one application. Press Submit yourself on the employer page.');
+  toast(source === 'signoff' ? `Approved. Northstar presses Submit for ${job(jid).company} now.` : 'Submit approved for this one application.');
 }
 async function queueFills(ids) {
   for (const id of ids) { if (activeFill(id)) continue; const p = approvedPack(id); if (!p) continue; S.fills.push({ id: uid('f'), job_id: id, pack_id: p.id, status: 'pending', created_at: now(), updated_at: now() }); }
