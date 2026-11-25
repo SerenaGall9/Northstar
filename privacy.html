@@ -15,7 +15,7 @@ p,li{color:var(--ink)}small{color:var(--muted)}ul{padding-left:20px}
 </head>
 <body><main>
 <h1>Northstar privacy</h1>
-<small>Covers the Northstar app and the Northstar Autofill Chrome extension. Last updated 23 November 2026.</small>
+<small>Covers the Northstar app and the Northstar Autofill Chrome extension. Last updated 25 November 2026.</small>
 
 <h2>The short version</h2>
 <p>Your job-search data stays on your own devices. The people who make Northstar do not collect it, cannot see it, and never sell or share it. Nothing is used for advertising.</p>
@@ -26,6 +26,7 @@ p,li{color:var(--ink)}small{color:var(--muted)}ul{padding-left:20px}
 <li><b>Where it is kept.</b> That fill package is kept in your browser's extension storage only until you record the application as submitted or cancel it. Then it is deleted.</li>
 <li><b>Reading job ads.</b> When you press Add role with a link, the extension opens that one page without your cookies and passes its text to the app.</li>
 <li><b>Cloud runner (optional).</b> If you set up your own Claude routine, the extension sends a request to Anthropic's routine address only when you press a Northstar button, using your own routine token. The token is kept in your browser and never shown to web pages.</li>
+<li><b>Cleaning up after LinkedIn.</b> After a LinkedIn Easy Apply submission, the extension opens your LinkedIn job application settings in a background tab and deletes only the CV file it uploaded for that application (matched by its exact file name). It deletes nothing else.</li>
 <li><b>Fill reports</b> hold field labels only, never your answers.</li>
 <li>The extension does not track your browsing, does not record pages you visit, and sends nothing to the Northstar makers.</li>
 </ul>
