@@ -158,11 +158,12 @@ async function setManualStatus(id, label, date, note) {
   for (const a of S.approvals.filter(a => a.job_id === id && !a.used_at)) { a.used_at = now(); a.revoked = 'manual status change'; }
   for (const f of S.fills.filter(f => f.job_id === id && !['cancelled', 'done'].includes(f.status))) { f.status = 'cancelled'; f.updated_at = now(); extSend({ type: 'clear', fill_id: f.id }); }
   j.updated_at = now();
-  await save(); renderAll(); toast(`${j.company}: ${from} → ${label}. Its packs are kept.`);
+  const gone = ['Rejected', 'Withdrawn'].includes(label) ? runCleanup(true) : 0;
+  await save(); renderAll(); toast(`${j.company}: ${from} → ${label}. ${['Rejected', 'Withdrawn'].includes(label) ? (gone ? 'Its tailored CV and cover letter are deleted; the record stays in Applied.' : 'The record stays in Applied.') : 'Its packs are kept.'}`);
 }
 function openStatusForm(id) {
   const j = job(id); if (!j) return;
-  formModal({ eyebrow: `${j.company} · ${j.role}`, title: 'Change status', copy: `Now: ${manualLabel(j) || statusOf(j)}. Packs are kept, and this never approves Submit.`, saveLabel: 'Change status',
+  formModal({ eyebrow: `${j.company} · ${j.role}`, title: 'Change status', copy: `Now: ${manualLabel(j) || statusOf(j)}. Rejected or Withdrawn deletes its tailored CV and cover letter (the record stays). This never approves Submit.`, saveLabel: 'Change status',
     fields: [{ id: 'st', label: 'New status', type: 'select', options: MANUAL_STATUS.map(([l]) => l), value: manualLabel(j) || 'Applied' }, { id: 'date', label: 'Date', type: 'date', value: now().slice(0, 10) }, { id: 'note', label: 'Note (optional)', type: 'textarea', rows: 2, value: '' }],
     onSave: async v => { await setManualStatus(id, v.st, v.date, v.note.trim()); } });
 }
@@ -557,7 +558,7 @@ function renderApps() {
     ${waiting.map(j => { const f = activeFill(j.id), ns = f?.report?.needs || []; return `<div class="needgroup"><b>${esc(j.company)}</b> <span class="tiny">${esc(j.role)}</span><ul>${ns.length ? ns.map(n => `<li>${esc(n.label)}${n.required ? ' · required' : ''}: ${esc(n.why)}</li>`).join('') : `<li>${esc(f?.report?.blocked || 'Open the page and press its Apply button')}</li>`}</ul></div>`; }).join('')}</div>` : '';
   // Applied table
   const applied = S.jobs.filter(j => (['submitted', 'interview'].includes(j.stage) || (j.stage === 'closed' && j.submitted_at)) && visible(j)).sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
-  $('applied').innerHTML = `<div class="card panel"><div class="panel-head"><div><h2>Applied (${applied.length})</h2><small>Submitted applications, newest first</small></div></div>${applied.length ? `<div class="tablewrap"><table class="applied"><thead><tr><th>Role</th><th>Company</th><th>Submitted</th><th>Reference</th><th>Status</th><th></th></tr></thead><tbody>${applied.map(j => `<tr><td>${esc(j.role)}</td><td>${esc(j.company)}</td><td>${j.submitted_at ? esc(fmtDate(j.submitted_at, false)) : '—'}</td><td>${j.receipt ? esc(j.receipt) + (j.receipt_verified ? ' ✓' : '') : '<span class="tiny">Not recorded</span>'}</td><td>${esc(j.stage === 'interview' ? 'Interview' : j.stage === 'closed' ? (j.outcome || 'Closed') : (j.outcome || 'Awaiting response'))}</td><td class="acts">${j.receipt ? '' : `<button class="btn sm" data-act="recordSubmitted" data-arg="${attr(j.id)}">Add reference</button>`}${j.stage === 'submitted' ? `<button class="btn sm" data-act="openInterview" data-arg="${attr(j.id)}">＋ Interview</button><button class="btn sm danger" data-act="closeJob" data-arg="${attr(j.id)}">Close</button>` : j.stage === 'interview' ? `<button class="btn sm" data-act="go" data-arg="interview">Open interview</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="tiny">Nothing submitted yet.</div>'}</div>`;
+  $('applied').innerHTML = `<div class="card panel"><div class="panel-head"><div><h2>Applied (${applied.length})</h2><small>Submitted applications, newest first</small></div></div>${applied.length ? `<div class="tablewrap"><table class="applied"><thead><tr><th>Role</th><th>Company</th><th>Submitted</th><th>Reference</th><th>Status</th><th></th></tr></thead><tbody>${applied.map(j => `<tr><td>${esc(j.role)}</td><td>${esc(j.company)}</td><td>${j.submitted_at ? esc(fmtDate(j.submitted_at, false)) : '—'}</td><td>${j.receipt ? esc(j.receipt) + (j.receipt_verified ? ' ✓' : '') : '<span class="tiny">Not recorded</span>'}</td><td>${esc(j.stage === 'interview' ? 'Interview' : j.stage === 'closed' ? (j.outcome || 'Closed') : (j.outcome || 'Awaiting response'))}${j.li_cv && !j.li_cv.deleted ? `<br><span class="tiny">LinkedIn CV not deleted: ${esc(j.li_cv.why)}. Delete ${esc(j.li_cv.name)} in LinkedIn, Settings, Job application settings.</span>` : ''}</td><td class="acts">${j.receipt ? '' : `<button class="btn sm" data-act="recordSubmitted" data-arg="${attr(j.id)}">Add reference</button>`}${j.stage === 'submitted' ? `<button class="btn sm" data-act="openInterview" data-arg="${attr(j.id)}">＋ Interview</button><button class="btn sm danger" data-act="closeJob" data-arg="${attr(j.id)}">Close</button>` : j.stage === 'interview' ? `<button class="btn sm" data-act="go" data-arg="interview">Open interview</button>` : ''}</td></tr>`).join('')}</tbody></table></div>` : '<div class="tiny">Nothing submitted yet.</div>'}</div>`;
   $('app-notice').innerHTML = ext.ready
     ? `Chrome extension connected. Approved applications open in Chrome by themselves, up to 5 at a time, and fill only confirmed answers and your approved documents. <label class="checkline" style="display:inline-flex;margin-left:8px"><input type="checkbox" data-act="toggleAutoOpen" ${S.profile.auto_open === false ? '' : 'checked'}> Open them automatically</label>`
     : isMobile() ? 'Form filling needs Chrome on a computer with the Northstar extension. On this phone you can review, approve and record submissions.'
@@ -1616,7 +1617,9 @@ function runCleanup(force) {
     const ints = S.interviews.filter(i => i.job_id === j.id);
     const interviewDone = ints.length && ints.every(i => i.finished);
     const closedNoInterview = j.stage === 'closed' && !ints.length;
-    if (interviewDone || closedNoInterview) for (const p of S.packs.filter(p => p.job_id === j.id && p.cv_md != null)) { p.cv_md = null; p.cl_md = null; p.sections = null; p.deleted_at = now(); n++; }
+    // Rejected or Withdrawn, and a LinkedIn Easy Apply once submitted: the pack goes at once (Sere, 25 Nov)
+    const ended = ['Rejected', 'Withdrawn'].includes(j.outcome) || (j.li_easy && j.submitted_at);
+    if (interviewDone || closedNoInterview || ended) for (const p of S.packs.filter(p => p.job_id === j.id && p.cv_md != null)) { p.cv_md = null; p.cl_md = null; p.sections = null; p.deleted_at = now(); n++; }
     if (['submitted', 'interview', 'closed'].includes(j.stage)) S.fills.filter(f => f.job_id === j.id && !f.cleared).forEach(f => { extSend({ type: 'clear', fill_id: f.id }); f.cleared = true; });
   }
   S.last_cleanup = today;
@@ -1739,7 +1742,16 @@ window.addEventListener('message', async e => {
     const j = job(f.job_id); j.stage = 'submitted'; j.submitted_at = now(); j.receipt = m.ref || ''; j.receipt_verified = !!m.ref; j.receipt_text = m.text || ''; j.updated_at = now();
     const a = approvalFor(j.id); if (a) a.used_at = now();
     f.status = 'done'; f.updated_at = now(); extSend({ type: 'clear', fill_id: f.id });
-    await save(); renderAll(); toast(`${j.company}: application confirmed${m.ref ? ' · reference ' + m.ref : ''}. Moved to Applied.`);
+    if (/(^|\.)linkedin\.com$/.test(m.host || '')) { j.li_easy = true; runCleanup(true); }
+    await save(); renderAll(); toast(`${j.company}: application confirmed${m.ref ? ' · reference ' + m.ref : ''}. Moved to Applied.${j.li_easy ? ' Its tailored CV and cover letter are deleted.' : ''}`);
+  }
+  if (m.type === 'li-cv-deleted') {
+    // the tailored CV Northstar uploaded to LinkedIn's saved resumes for this application
+    const f = S.fills.find(x => x.id === m.fill_id); const j = f && job(f.job_id); if (!j) return;
+    j.li_cv = { name: m.name || '', deleted: !!m.ok, why: m.why || '', at: now() };
+    j.history ||= []; j.history.push({ at: now(), date: now().slice(0, 10), from: statusOf(j), to: statusOf(j), note: m.ok ? `Deleted ${m.name} from LinkedIn saved resumes` : `LinkedIn CV not deleted: ${m.why}` });
+    j.updated_at = now(); await save(); renderAll();
+    toast(m.ok ? `${j.company}: deleted ${m.name} from your LinkedIn saved resumes.` : `${j.company}: could not delete ${m.name} from LinkedIn (${m.why}). You can delete it in LinkedIn: Settings, Job application settings.`);
   }
 });
 function pingExt() { window.postMessage({ ns: 'northstar-app', type: 'ping' }, location.origin); }
