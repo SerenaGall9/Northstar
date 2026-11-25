@@ -1732,7 +1732,7 @@ window.addEventListener('message', async e => {
     if (n) { await save(); renderAll(); toast(`${n} answer${n > 1 ? 's' : ''} you typed on the form ${n > 1 ? 'are' : 'is'} waiting in Career profile › Answers for you to approve.`); }
   }
   if (m.type === 'submit-unlocked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && !approvalFor(f.job_id)) { await recordApproval(f.job_id, 'page'); } }
-  if (m.type === 'submit-clicked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && f.status !== 'done') { f.status = 'submit_pressed'; f.submit_at = now(); f.updated_at = now(); await save(); renderAll(); toast(`Submit pressed for ${job(f.job_id).company}. Waiting for the employer's confirmation.`); } }
+  if (m.type === 'submit-clicked') { const f = S.fills.find(x => x.id === m.fill_id); if (f && f.status !== 'done') { f.status = 'submit_pressed'; f.submit_at = now(); f.updated_at = now(); await save(); renderAll(); toast(`${m.by === 'you' ? 'You pressed Submit' : 'Submit pressed'} for ${job(f.job_id).company}. Waiting for the employer's confirmation.`); } }
   if (m.type === 'receipt') {
     // the employer's confirmation page, read after Northstar pressed Submit: moves the role to Applied
     const f = S.fills.find(x => x.id === m.fill_id); if (!f || f.status !== 'submit_pressed') return;
