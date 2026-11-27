@@ -546,13 +546,16 @@ function openClaimGroups(roles) {
   return [...g.values()];
 }
 function batchClaimsHtml(roles) {
+  const b = (S.batches || [])[0]; if (!b) return '';
+  roles = roles.filter(j => b.job_ids.includes(j.id));
   if (roles.length < 2) return '';
   const groups = openClaimGroups(roles); if (!groups.length) return '';
   return `<div class="card panel" id="batch-claims" style="margin-bottom:14px"><div class="panel-head"><div><h2>Questions for this batch <span class="tag gray">${groups.length}</span></h2><small>Answer them here once. Each answer is saved as confirmed and used in every pack that asked it.</small></div></div>${groups.map((g, n) => `<div class="claim"><b>${esc(g.question)}</b><br><span class="tiny">${esc(g.refs.map(r => r.company).filter((c, i, a) => a.indexOf(c) === i).join(', '))}${g.why ? ' · ' + esc(g.why) : ''}</span>
     <textarea id="bclaim-${n}" placeholder="Type the facts in your own words"></textarea><div class="crow"><button class="btn sm primary" data-act="batchClaimSave" data-arg="${n}">Save as confirmed answer</button><button class="btn sm" data-act="batchClaimNA" data-arg="${n}">This doesn't apply to me</button></div></div>`).join('')}</div>`;
 }
 async function batchClaimSave(n, na) {
-  const roles = S.jobs.filter(j => (j.stage === 'review' || j.stage === 'drafting') && visible(j));
+  const b = (S.batches || [])[0];
+  const roles = S.jobs.filter(j => (j.stage === 'review' || j.stage === 'drafting') && visible(j) && b && b.job_ids.includes(j.id));
   const g = openClaimGroups(roles)[+n]; if (!g) return;
   const text = na ? '' : ($(`bclaim-${n}`)?.value || '').trim();
   if (!na && !text) { toast('Type the facts first, or press that it does not apply'); return; }
@@ -614,13 +617,14 @@ function packBody(j, p) {
   const docsHtml = cv == null ? `<div class="notice" style="margin-top:12px">The CV and letter copies were deleted under the document lifecycle. Text answers and outcomes are kept.</div>` :
     `<div class="docs"><div class="docwrap"><div class="dochead"><span>CV ${approved ? '' : 'draft'}</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPack" data-arg="${attr(p.id)}|cv">⇩ PDF</button><button class="btn sm" data-act="viewPack" data-arg="${attr(p.id)}|cv">Open</button></span></div><div class="paper">${mdToHtml(cv)}</div></div>
      <div class="docwrap"><div class="dochead"><span>Cover letter · ${words(cl)} words</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPack" data-arg="${attr(p.id)}|cl">⇩ PDF</button><button class="btn sm" data-act="viewPack" data-arg="${attr(p.id)}|cl">Open</button></span></div><div class="paper letter">${mdToHtml(letterDoc(p))}</div></div></div>`;
-  const claimsHtml = approved ? '' : claims.length ? `<div class="claims"><b>Claims to confirm</b> <span class="tiny">${openClaims ? openClaims + ' still open' : 'all answered'}${p.auto_claims ? ` · ${p.auto_claims} answered from your earlier answers, check them` : ''}</span>${claims.map((c, i) => claimBox(p, c, i)).join('')}</div>` : `<p class="tiny" style="margin-top:12px">No claim questions were flagged in this draft.</p>`;
+  const claimsHtml = approved ? '' : claims.length ? `<div class="claims"><b>Claims to confirm</b> <span class="tiny">${openClaims ? openClaims + ' still open' : 'all answered'}${p.auto_claims ? ` · ${p.auto_claims} answered from your earlier answers, check them` : ''}</span>${claims.map((c, i) => c.capped ? '' : claimBox(p, c, i)).join('')}${claims.some(c => c.capped) ? `<p class="tiny">${claims.filter(c => c.capped).length} more not asked (over the 3-question limit): the next version rewords them to what is confirmed.</p>` : ''}</div>` : `<p class="tiny" style="margin-top:12px">No claim questions were flagged in this draft.</p>`;
   const crHtml = cr.length ? `<div style="margin-top:12px"><b>Your change requests</b><ul class="bullets">${cr.map(c => `<li>${esc(c.note)} <span class="tiny">${fmtDate(c.at)}</span></li>`).join('')}</ul></div>` : '';
-  const canApprove = ui.read && !openClaims;
+  const rebuild = claims.filter(c => c.state === 'na' && (c.capped || c.auto)).length;
+  const canApprove = ui.read && !openClaims && !rebuild;
   const actions = approved ? `<div class="actions"><button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download Markdown</button><span class="tiny">Approved ${fmtDate(p.approved_at)} · version ${esc(p.hash)}</span></div>`
     : `<label class="checkline checkline-row"><input type="checkbox" data-act="tickRead" data-arg="${attr(j.id)}" ${ui.read ? 'checked' : ''}> I have read this exact CV and cover letter version in full</label>
       <div class="actions"><button class="btn sm" data-act="editDraft" data-arg="${attr(j.id)}">Edit it myself</button><button class="btn sm" data-act="requestChange" data-arg="${attr(p.id)}">${cr.length ? 'Add another change' : 'Request changes'}</button>${needsFix(p) ? `<button class="btn sm primary" data-act="draftPack" data-arg="${attr(j.id)}">${apiKey() ? 'Build new version' : 'New version via Claude chat'}</button>` : ''}<button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download drafts</button><button class="btn sm primary" data-act="approvePack" data-arg="${attr(p.id)}" ${canApprove ? '' : 'disabled'}>Approve this version</button></div>
-      <div class="tiny" style="margin-top:6px">${canApprove ? '' : 'To approve: answer or tick every claim, and tick that you read it. '}Approval covers version ${esc(p.hash)} only. It does not start form filling or submission.</div>`;
+      <div class="tiny" style="margin-top:6px">${canApprove ? '' : rebuild ? 'To approve: build the new version first, so the claims Northstar left out are reworded. ' : 'To approve: answer or tick every claim, and tick that you read it. '}Approval covers version ${esc(p.hash)} only. It does not start form filling or submission.</div>`;
   const notesHtml = (p.notes || []).length ? `<details class="more" style="margin-top:12px"><summary>From your old tracker (${p.notes.length} sections: ${esc(p.notes.map(n => n.heading).join(', '))})</summary>${p.notes.map(n => `<details class="more"><summary>${esc(n.heading)}</summary><div class="paper">${mdToHtml(n.text)}</div></details>`).join('')}</details>` : '';
   return score + docsHtml + claimsHtml + notesHtml + crHtml + actions;
 }
@@ -1591,11 +1595,11 @@ const freshClaims = p => (p?.claims || []).filter(c => c.state !== 'open' && !c.
 const needsFix = p => !!p && p.status === 'draft' && ((p.change_requests || []).length > 0 || freshClaims(p).length > 0);
 function packArgs(j) {
   const prev = latestPack(j.id), redo = needsFix(prev);
-  const claimNotes = redo ? freshClaims(prev).map(c => c.state === 'na' ? `${c.question}: does not apply` : `${c.question}: ${c.answer}`) : [];
+  const claimNotes = redo ? freshClaims(prev).map(c => c.capped ? `${c.question}: not confirmed, reword it to what the documents support, without asking` : c.state === 'na' ? `${c.question}: does not apply` : `${c.question}: ${c.answer}`) : [];
   return { job: j, docs: docs(), answers: S.answers, changeRequests: prev?.change_requests || [], previous: redo ? prev : null, claimNotes, naClaims: naClaimList() };
 }
 // Claims you said do not apply, in any pack: never asked or claimed again (Sere, 27 Nov: fewer claim questions)
-function naClaimList() { const seen = new Set(), out = []; for (const p of S.packs) for (const c of p.claims || []) if (c.state === 'na' && !seen.has(norm(c.question))) { seen.add(norm(c.question)); out.push(c.question); } return out.slice(-40); }
+function naClaimList() { const seen = new Set(), out = []; for (const p of S.packs) for (const c of p.claims || []) if (c.state === 'na' && !c.capped && !seen.has(norm(c.question))) { seen.add(norm(c.question)); out.push(c.question); } return out.slice(-40); }
 const claimWords = t => new Set(norm(t).split(/[^a-z0-9]+/).filter(w => w.length > 3));
 function sameClaim(a, b) { if (norm(a) === norm(b)) return true; const x = claimWords(a), y = claimWords(b); if (x.size < 3 || y.size < 3) return false; let n = 0; x.forEach(w => { if (y.has(w)) n++; }); return n / new Set([...x, ...y]).size >= 0.75; }
 // A new pack's questions you already answered are filled in from your answers; ones you said don't apply are marked so
@@ -1608,6 +1612,17 @@ function autoResolveClaims(p) {
     // said "doesn't apply" before: the draft should not rely on it, so this counts towards Fix all (not carried)
     if (naClaimList().some(q => sameClaim(q, c.question))) { c.state = 'na'; c.auto = true; n++; }
   }
+  // At most 3 questions per pack (Sere, 27 Nov: "too many questions"). Claude lists the most important first; any
+  // beyond 3 is never asked: the next version rewords it to what is confirmed, and approval waits for that version.
+  let open = 0;
+  for (const c of p.claims) if (c.state === 'open' && ++open > MAX_CLAIMS) { c.state = 'na'; c.capped = true; }
+  return n;
+}
+const MAX_CLAIMS = 3;
+// Packs drafted before v41: fill their questions from earlier answers and apply the limit, once
+function tidyOldClaims() {
+  let n = 0;
+  for (const p of S.packs) { if (p.status !== 'draft' || p.claims_v41) continue; const before = (p.claims || []).filter(c => c.state === 'open').length; p.auto_claims = (p.auto_claims || 0) + autoResolveClaims(p); p.claims_v41 = true; n += before - p.claims.filter(c => c.state === 'open').length; }
   return n;
 }
 function applyPackResult(j, r, origin) {
@@ -1641,7 +1656,7 @@ function addPack(j, { sections, cl_md, claims = [], quality = null, gaps = [], o
   p.hash = hash(cv_md + '\n' + cl_md);
   // carry over claims already answered in the previous version
   if (prev) p.claims.forEach(c => { const o = (prev.claims || []).find(x => norm(x.question) === norm(c.question) && x.state !== 'open'); if (o) { c.state = o.state; c.answer = o.answer; c.carried = true; } });
-  p.auto_claims = autoResolveClaims(p);
+  p.auto_claims = autoResolveClaims(p); p.claims_v41 = true;
   S.packs.push(p);
   reviewUI[j.id] = { open: true, read: false };
   return p;
@@ -2114,6 +2129,7 @@ async function start() {
   await backup('opened Northstar');
   if ((S.answers || []).length && mergeDuplicateAnswers()) { await backup('before merging duplicate answers', true); await save(); }
   if (runCleanup(false)) await save();
+  if ((S.packs || []).some(p => p.status === 'draft' && !p.claims_v41)) { await backup('before tidying claim questions', true); tidyOldClaims(); await save(); }
   renderAll();
   const p = local.get('page', 'home'); if (p !== 'home' && PAGE_NAMES[p]) go(p);
   if (!S.docs.master_cv) showOnboarding();
