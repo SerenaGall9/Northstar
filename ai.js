@@ -97,7 +97,14 @@ export async function searchRoles({ key, model, onProgress, ...a }) {
 
 /** Start application / Build new version: draft the three tailored CV sections and the cover letter. */
 export function packPrompt({ job, docs, answers, changeRequests, previous, claimNotes = [], naClaims = [] }) {
-  const confirmed = answers.filter(a => a.confirmed && !a.sensitive && a.answer).map(a => `- ${a.question}: ${a.answer}`).join('\n');
+  // Form-only answers (pay, notice, right to work, contact details) are not used to write a CV or letter, and they made
+  // pack requests too long for the cloud runner (Sere, 27 Nov: Fix all did not work)
+  // Claim answers first, then stories, then answers to employer questions, up to a fixed size so the request stays
+  // within the runner's limit however many answers you save
+  const rank = a => ({ claim: 0, story: 1 }[a.kind] ?? 2);
+  let room = 14000;
+  const confirmed = answers.filter(a => a.confirmed && !a.sensitive && a.answer && a.kind !== 'form').sort((a, b) => rank(a) - rank(b))
+    .map(a => `- ${a.question}: ${a.answer}`).filter(l => (room -= l.length + 1) >= 0).join('\n');
   const user = `Write an application pack for this one role.\n\n<job untrusted="true">\nCompany: ${job.company}\nRole: ${job.role}\nMarket: ${job.market}\nLocation: ${job.location}\nIndustry: ${job.industry || ''}\nSalary: ${job.salary || 'not stated'}\nAd summary:\n${job.jd_text || '(no ad text saved)'}\nEvidence: ${(job.evidence || []).join(' · ')}\nGaps: ${(job.gaps || []).join(' · ')}\n</job>\n\n` +
     (previous ? `This is a new version. Previous version:\n<previous_cv_sections>\n${JSON.stringify(previous.sections)}\n</previous_cv_sections>\n<previous_letter>\n${previous.cl_md}\n</previous_letter>\n${changeRequests.length ? `Change requests from the candidate (apply all of them):\n${changeRequests.map(c => '- ' + c.note).join('\n')}\n` : ''}${claimNotes.length ? `Claim questions the candidate has answered (use the confirmed facts as written; anything marked "does not apply" must be removed or reworded so the drafts no longer rely on it):\n${claimNotes.map(c => '- ' + c).join('\n')}\n` : ''}\n` : '') +
     `Tailor only PROFESSIONAL SUMMARY, CAREER HIGHLIGHTS and CORE COMPETENCIES; every other CV section stays exactly as in the Master CV. Write the cover letter following the playbook. Then run the playbook's final quality check.\n\n` +
