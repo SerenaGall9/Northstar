@@ -301,6 +301,25 @@ function confirmBox(title, copy, okLabel = 'Confirm') {
     $('cb-yes').onclick = () => { closeModal(); res(true); };
   });
 }
+// Fit feedback (Sere, 27 Nov): when you disagree with a fit, one tap says which part was off. Kept for the monthly
+// check; weights are never changed without your OK.
+const FIT_REASONS = [['experience', 'Experience'], ['role', 'Seniority'], ['location', 'Location'], ['pay', 'Pay'], ['industry', 'Industry'], ['other', 'Something else']];
+function askFitFeedback(j, dir) {
+  return new Promise(res => {
+    openModal(`<div class="eyebrow">${esc(j.company)} · fit ${esc(j.fit || '—')}</div><h2>${dir === 'high' ? 'Was the fit too high?' : 'Was the fit too low?'}</h2><p>Pick what Northstar scored wrong. This helps the monthly check suggest better weights; nothing changes without your OK.</p>
+     <div class="chips" style="gap:8px;flex-wrap:wrap">${FIT_REASONS.map(([k, n]) => `<button class="btn sm" data-ff="${k}">${esc(n)}</button>`).join('')}</div>
+     <div class="modalfoot"><button class="btn" id="ff-skip">Skip</button></div>`);
+    const done = async k => { closeModal(); if (k) { j.fit_feedback = { dir, part: k, fit: j.fit, breakdown: j.breakdown || null, at: now() }; await save(); } res(); };
+    document.querySelectorAll('[data-ff]').forEach(b => b.onclick = () => done(b.dataset.ff));
+    $('ff-skip').onclick = () => done(null);
+  });
+}
+function fitFeedbackSummary() {
+  const fb = S.jobs.map(j => j.fit_feedback).filter(Boolean);
+  if (!fb.length) return '';
+  const c = {}; fb.forEach(f => { const k = `${f.part}|${f.dir}`; c[k] = (c[k] || 0) + 1; });
+  return Object.entries(c).sort((a, b) => b[1] - a[1]).map(([k, n]) => { const [part, dir] = k.split('|'); return `${(FIT_REASONS.find(r => r[0] === part) || [, part])[1]} too ${dir} ×${n}`; }).join(' · ');
+}
 // Generic form modal. fields: {id,label,type,value,options,rows,full,placeholder}
 function formModal({ eyebrow = '', title, copy = '', fields, saveLabel = 'Save', size = '', extra = '', onSave }) {
   const f = fields.map(x => {
@@ -375,6 +394,7 @@ function renderHome() {
   const t0 = Date.now() - 864e5, t1 = Date.now() + 30 * 864e5;
   $('s-int').textContent = S.interviews.filter(i => { const t = Date.parse(i.when_local); return t >= t0 && t <= t1 && visible(job(i.job_id)); }).length;
 
+  renderBatchBar();
   // next actions
   const open = all.filter(j => ['review', 'application', 'interview', 'shortlisted'].includes(j.stage));
   const rank = { review: 0, application: 1, interview: 2, shortlisted: 3 };
@@ -392,6 +412,57 @@ function renderHome() {
   renderCloud();
   $('run-list').innerHTML = runs.length ? runs.map((r, i) => runCard(r, i === 0)).join('') : '<div class="empty">No search has been run yet. Press Run search when you want one.</div>';
 }
+/* ----- Batch of applications (Sere, 27 Nov): start 5 to 10 shortlisted roles in one go ----- */
+const BATCH_MIN = 5, BATCH_MAX = 10;
+let batchChat = [];
+const batchReady = () => S.jobs.filter(j => j.stage === 'shortlisted' && visible(j) && !latestPack(j.id)).sort((a, b) => (b.fit || 0) - (a.fit || 0));
+function renderBatchBar() {
+  const el = $('batch-bar'); if (!el) return;
+  const n = batchReady().length;
+  if (!n) { el.innerHTML = ''; return; }
+  const ok = n >= BATCH_MIN, take = Math.min(n, BATCH_MAX);
+  el.innerHTML = `<div class="card panel batchbar" style="display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:16px"><div><h2 style="margin:0">${ok ? `${n} shortlisted roles are ready` : `${n} shortlisted role${n === 1 ? '' : 's'} so far`}</h2><small>${ok ? `A batch drafts every pack together and moves them to Review.${n > BATCH_MAX ? ` Up to ${BATCH_MAX} per batch, highest fit first.` : ''}` : `Shortlist ${BATCH_MIN - n} more to start a batch of applications.`}</small></div><button class="btn ${ok ? 'lime' : ''}" data-act="openBatch" ${ok ? '' : 'disabled'}>Start a batch of ${ok ? take : BATCH_MIN} applications</button></div>`;
+}
+function openBatch() {
+  const roles = batchReady();
+  if (roles.length < BATCH_MIN) { toast(`Shortlist at least ${BATCH_MIN} roles first`); return; }
+  if (!S.docs.master_cv) { toast('Import your setup file first (Career profile › Data & connections)'); return; }
+  const canCloud = ext.ready && ext.runner;
+  const list = roles.map((j, i) => `<label class="checkline checkline-row" style="align-items:flex-start"><input type="checkbox" class="bt-pick" value="${attr(j.id)}" ${i < BATCH_MAX ? 'checked' : ''}> <span><b>${esc(j.company)}</b> · ${esc(j.role)}<br><span class="tiny">Fit ${esc(j.fit || '—')}${j.location ? ' · ' + esc(j.location) : ''}</span></span></label>`).join('');
+  openModal(`<div class="eyebrow">Home</div><h2>Start a batch of applications</h2><p>Every ticked role gets its pack drafted and moves to Review. Keep ${BATCH_MIN} to ${BATCH_MAX} ticked.</p>${list}
+   <p class="tiny" id="bt-count"></p>
+   <p class="tiny">Nothing is approved or submitted for you: you read and approve each pack in Review, and approve each Submit in Final sign-off.</p>
+   ${canCloud ? '<p class="tiny">Each pack goes to your Northstar runner as its own request, so one failing doesn\'t stop the others. Each takes 5–10 minutes.</p>' : '<div class="notice">Your Northstar runner isn\'t connected in this browser, so Northstar walks you through the Claude chat prompt for each role, one after another.</div>'}
+   <div class="modalfoot"><button class="btn" data-act="closeModal">Cancel</button><button class="btn primary" id="bt-go">Start batch</button></div>`, 'wide');
+  const count = () => { const n = document.querySelectorAll('.bt-pick:checked').length; $('bt-count').textContent = `${n} ticked` + (n < BATCH_MIN ? ` · tick at least ${BATCH_MIN}` : n > BATCH_MAX ? ` · untick ${n - BATCH_MAX}` : ''); $('bt-go').disabled = n < BATCH_MIN || n > BATCH_MAX; $('bt-go').textContent = `Start batch of ${n}`; };
+  document.querySelectorAll('.bt-pick').forEach(x => x.onchange = count); count();
+  $('bt-go').onclick = () => startBatch([...document.querySelectorAll('.bt-pick:checked')].map(x => x.value), canCloud);
+}
+async function startBatch(ids, canCloud) {
+  if (ids.length < BATCH_MIN || ids.length > BATCH_MAX) return;
+  await backup('before starting a batch', true);
+  const at = now(); S.batches = S.batches || []; S.batches.unshift({ id: uid('b'), at, job_ids: ids });
+  for (const id of ids) { const j = job(id); j.batch_at = at; j.stage = 'review'; j.updated_at = now(); }
+  await save();
+  if (canCloud) {
+    $('bt-go').disabled = true; let sent = 0; const failed = [];
+    for (const id of ids) {
+      const j = job(id); $('bt-go').textContent = `Sending ${sent + failed.length + 1} of ${ids.length}…`;
+      try { await fireCloud({ kind: 'pack', ref: { job_id: id }, title: `Pack · ${j.company}`, prompt: AI.chatPrompt(AI.packPrompt(packArgs(j))) }); sent++; }
+      catch (e) { failed.push(`${j.company}: ${e.message}`); }
+    }
+    closeModal(); renderAll(); go('review');
+    toast(`Batch started: ${sent} of ${ids.length} packs sent to your Northstar runner.` + (failed.length ? ` Not sent: ${failed.join('; ')}. Use Copy prompt for Claude on those cards.` : ' They appear in Review as they finish.'));
+    return;
+  }
+  closeModal(); renderAll(); go('review');
+  if (apiKey()) { for (const id of ids) await draftPackFor(id); return; }
+  batchChat = ids.slice(1); chatPack(ids[0]);
+}
+function nextBatchChat() {
+  while (batchChat.length) { const id = batchChat.shift(); if (job(id) && !latestPack(id)) { setTimeout(() => chatPack(id), 300); return; } }
+}
+
 function nextButton(j, s) {
   if (s === 'Shortlisted') return `<button class="btn sm primary" data-act="startApplication" data-arg="${attr(j.id)}">Start application</button>`;
   if (['Ready to review', 'Changes requested', 'No draft yet'].includes(s)) return `<button class="btn sm" data-act="goReview" data-arg="${attr(j.id)}">Review</button>`;
@@ -436,7 +507,9 @@ function renderDiscovery() {
   const groups = Object.entries(byMarket).map(([m, list]) => group(`${m} roles to approve or dismiss`, list.length, collapsible(list.map(jobCard), 10, 'disc-' + m), true)).join('');
   $('discovery-list').innerHTML = (groups || `<div class="card empty">No roles waiting. Press Run search, or Add role with a job link.</div>`)
     + (arch.length ? group('Screened out', arch.length, arch.map(j => `<div class="listrow"><span><b>${esc(j.company)}</b> · ${esc(j.role)}<br><span class="tiny">Fit ${j.fit} · ${esc(j.reason || lines(j.gaps)[0] || '')}</span></span><button class="btn sm" data-act="openJob" data-arg="${attr(j.id)}">Details</button></div>`).join(''), false) : '');
-  $('rubric-meters').innerHTML = RUBRIC.map(([k, n, max]) => `<div class="meter"><span>${n}</span><div class="meterbar"><i style="width:${max / 35 * 100}%"></i></div><b>${max}</b></div>`).join('');
+  $('rubric-meters').innerHTML = RUBRIC.map(([k, n, max]) => `<div class="meter"><span>${n}</span><div class="meterbar"><i style="width:${max / 35 * 100}%"></i></div><b>${max}</b></div>`).join('')
+    + `<details class="more"><summary>Scoring details Northstar adds</summary><ul class="bullets">${AI.SCORING_RULES.map(r => `<li class="tiny">${esc(r)}</li>`).join('')}</ul></details>`
+    + (fitFeedbackSummary() ? `<p class="tiny">Your fit feedback, for the monthly check: ${esc(fitFeedbackSummary())}</p>` : '');
   $('ko-count').textContent = `Knock-outs counted, not saved: ${S.knockouts_counted || 0}. 85+ = fit 5 · 70 = 4 · 55 = 3 · 40 = 2.`;
   const on = S.sources.filter(s => s.enabled);
   $('src-summary').innerHTML = on.length ? `${on.length} of ${S.sources.length} sources switched on: ${on.map(s => esc(s.name)).join(', ')}` : 'No sources switched on yet.';
@@ -460,9 +533,32 @@ function renderReview() {
   const waiting = list.filter(j => j.stage === 'review' || j.stage === 'drafting');
   const approved = list.filter(j => approvedPack(j.id) && !['review', 'drafting'].includes(j.stage));
   const fixable = fixAllRoles();
-  $('review-list').innerHTML = (fixable.length ? `<div class="notice" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px"><span>${fixable.length === 1 ? '1 role has' : fixable.length + ' roles have'} changes or answered claims waiting for a new version.</span><button class="btn primary" data-act="fixAll">Fix all</button></div>` : '') + group('Waiting for your review', waiting.length, waiting.map(reviewCard).join('') || '<div class="empty">No packs waiting. Press Start application on a shortlisted role.</div>', true)
+  $('review-list').innerHTML = batchClaimsHtml(waiting) + (fixable.length ? `<div class="notice" style="display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:12px"><span>${fixable.length === 1 ? '1 role has' : fixable.length + ' roles have'} changes or answered claims waiting for a new version.</span><button class="btn primary" data-act="fixAll">Fix all</button></div>` : '') + group('Waiting for your review', waiting.length, waiting.map(reviewCard).join('') || '<div class="empty">No packs waiting. Press Start application on a shortlisted role.</div>', true)
     + (approved.length ? group('Approved versions', approved.length, approved.map(reviewCard).join(''), false) : '');
   document.querySelectorAll('details.rcard').forEach(d => d.addEventListener('toggle', () => { const k = d.dataset.job; reviewUI[k] = reviewUI[k] || {}; reviewUI[k].open = d.open; }));
+}
+// One combined list of the claim questions still open across the roles waiting in Review: the same question in
+// several packs is answered once
+function openClaimGroups(roles) {
+  const g = new Map();
+  for (const j of roles) { const p = latestPack(j.id); if (!p || p.status !== 'draft') continue;
+    (p.claims || []).forEach((c, i) => { if (c.state !== 'open') return; const k = norm(c.question); if (!g.has(k)) g.set(k, { question: c.question, why: c.why, refs: [] }); g.get(k).refs.push({ pid: p.id, i, company: j.company }); }); }
+  return [...g.values()];
+}
+function batchClaimsHtml(roles) {
+  if (roles.length < 2) return '';
+  const groups = openClaimGroups(roles); if (!groups.length) return '';
+  return `<div class="card panel" id="batch-claims" style="margin-bottom:14px"><div class="panel-head"><div><h2>Questions for this batch <span class="tag gray">${groups.length}</span></h2><small>Answer them here once. Each answer is saved as confirmed and used in every pack that asked it.</small></div></div>${groups.map((g, n) => `<div class="claim"><b>${esc(g.question)}</b><br><span class="tiny">${esc(g.refs.map(r => r.company).filter((c, i, a) => a.indexOf(c) === i).join(', '))}${g.why ? ' · ' + esc(g.why) : ''}</span>
+    <textarea id="bclaim-${n}" placeholder="Type the facts in your own words"></textarea><div class="crow"><button class="btn sm primary" data-act="batchClaimSave" data-arg="${n}">Save as confirmed answer</button><button class="btn sm" data-act="batchClaimNA" data-arg="${n}">This doesn't apply to me</button></div></div>`).join('')}</div>`;
+}
+async function batchClaimSave(n, na) {
+  const roles = S.jobs.filter(j => (j.stage === 'review' || j.stage === 'drafting') && visible(j));
+  const g = openClaimGroups(roles)[+n]; if (!g) return;
+  const text = na ? '' : ($(`bclaim-${n}`)?.value || '').trim();
+  if (!na && !text) { toast('Type the facts first, or press that it does not apply'); return; }
+  for (const r of g.refs) { const c = S.packs.find(x => x.id === r.pid).claims[r.i]; delete c.carried; if (na) c.state = 'na'; else { c.state = 'confirmed'; c.answer = text; } }
+  if (!na) upsertAnswer({ question: g.question, answer: text, kind: 'claim', confirmed: true, scope: 'both' });
+  await save(); renderReview(); toast(na ? 'Marked as not applying in ' + g.refs.length + ' pack' + (g.refs.length > 1 ? 's' : '') : 'Saved as a confirmed answer in ' + g.refs.length + ' pack' + (g.refs.length > 1 ? 's' : '') + '.');
 }
 function fixAllRoles() { return S.jobs.filter(j => j.stage === 'review' && visible(j) && needsFix(latestPack(j.id))); }
 function fixWhat(p) { const n = (p.change_requests || []).length, c = freshClaims(p).length; return [n ? `${n} change${n > 1 ? 's' : ''}` : '', c ? `${c} answered claim${c > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · '); }
@@ -518,7 +614,7 @@ function packBody(j, p) {
   const docsHtml = cv == null ? `<div class="notice" style="margin-top:12px">The CV and letter copies were deleted under the document lifecycle. Text answers and outcomes are kept.</div>` :
     `<div class="docs"><div class="docwrap"><div class="dochead"><span>CV ${approved ? '' : 'draft'}</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPack" data-arg="${attr(p.id)}|cv">⇩ PDF</button><button class="btn sm" data-act="viewPack" data-arg="${attr(p.id)}|cv">Open</button></span></div><div class="paper">${mdToHtml(cv)}</div></div>
      <div class="docwrap"><div class="dochead"><span>Cover letter · ${words(cl)} words</span><span class="actions" style="margin:0"><button class="btn sm" data-act="pdfPack" data-arg="${attr(p.id)}|cl">⇩ PDF</button><button class="btn sm" data-act="viewPack" data-arg="${attr(p.id)}|cl">Open</button></span></div><div class="paper letter">${mdToHtml(letterDoc(p))}</div></div></div>`;
-  const claimsHtml = approved ? '' : claims.length ? `<div class="claims"><b>Claims to confirm</b> <span class="tiny">${openClaims ? openClaims + ' still open' : 'all answered'}</span>${claims.map((c, i) => claimBox(p, c, i)).join('')}</div>` : `<p class="tiny" style="margin-top:12px">No claim questions were flagged in this draft.</p>`;
+  const claimsHtml = approved ? '' : claims.length ? `<div class="claims"><b>Claims to confirm</b> <span class="tiny">${openClaims ? openClaims + ' still open' : 'all answered'}${p.auto_claims ? ` · ${p.auto_claims} answered from your earlier answers, check them` : ''}</span>${claims.map((c, i) => claimBox(p, c, i)).join('')}</div>` : `<p class="tiny" style="margin-top:12px">No claim questions were flagged in this draft.</p>`;
   const crHtml = cr.length ? `<div style="margin-top:12px"><b>Your change requests</b><ul class="bullets">${cr.map(c => `<li>${esc(c.note)} <span class="tiny">${fmtDate(c.at)}</span></li>`).join('')}</ul></div>` : '';
   const canApprove = ui.read && !openClaims;
   const actions = approved ? `<div class="actions"><button class="btn sm" data-act="downloadPack" data-arg="${attr(p.id)}">Download Markdown</button><span class="tiny">Approved ${fmtDate(p.approved_at)} · version ${esc(p.hash)}</span></div>`
@@ -531,8 +627,8 @@ function packBody(j, p) {
 function claimBox(p, c, i) {
   const done = c.state !== 'open';
   return `<div class="claim ${done ? 'done' : ''}"><q>${esc(c.question)}</q>${c.why ? `<div class="why">${esc(c.why)}</div>` : ''}
-   ${c.state === 'confirmed' ? `<div class="tiny" style="margin-top:6px">✓ Saved as a confirmed answer: ${esc(c.answer)}</div><button class="btn sm link" data-act="claimReopen" data-arg="${attr(p.id)}|${i}">Change</button>`
-      : c.state === 'na' ? `<div class="tiny" style="margin-top:6px">✓ Marked as not applying. The next version should not rely on it.</div><button class="btn sm link" data-act="claimReopen" data-arg="${attr(p.id)}|${i}">Undo</button>`
+   ${c.state === 'confirmed' ? `<div class="tiny" style="margin-top:6px">✓ ${c.auto ? 'Answered from your earlier answers' : 'Saved as a confirmed answer'}: ${esc(c.answer)}</div><button class="btn sm link" data-act="claimReopen" data-arg="${attr(p.id)}|${i}">Change</button>`
+      : c.state === 'na' ? `<div class="tiny" style="margin-top:6px">✓ ${c.auto ? 'You said this doesn\'t apply on an earlier pack.' : 'Marked as not applying.'} The next version should not rely on it.</div><button class="btn sm link" data-act="claimReopen" data-arg="${attr(p.id)}|${i}">Undo</button>`
         : `<textarea id="claim-${attr(p.id)}-${i}" placeholder="Type the facts in your own words">${esc(c.answer || '')}</textarea><div class="crow"><button class="btn sm primary" data-act="claimSave" data-arg="${attr(p.id)}|${i}">Save as confirmed answer</button><label class="checkline"><input type="checkbox" data-act="claimNA" data-arg="${attr(p.id)}|${i}"> This doesn't apply to me</label></div>`}</div>`;
 }
 
@@ -928,13 +1024,14 @@ const ACT = {
   pickSearchMarket(m) { local.set('search_market', m); closeModal(); runSearch(); },
   async gmailAccept(gid) { const x = S.gmail.suggestions.find(s => s.id === gid); if (!x) return; x.status = 'accepted'; x.done_at = now(); await setManualStatus(x.job_id, GMAIL_TO[x.kind], x.date, 'From Gmail: ' + GMAIL_WORD[x.kind]); },
   async gmailDismiss(gid) { const x = S.gmail.suggestions.find(s => s.id === gid); if (!x) return; x.status = 'dismissed'; x.done_at = now(); await save(); renderAll(); },
-  async shortlist(id) { const j = job(id); j.stage = 'shortlisted'; j.shortlisted_at = now(); j.updated_at = now(); await save(); closeModal(); renderAll(); toast('Added to your shortlist. A pack is made only when you press Start application.'); },
+  async shortlist(id) { const j = job(id); j.stage = 'shortlisted'; j.shortlisted_at = now(); j.updated_at = now(); await save(); closeModal(); renderAll(); toast('Added to your shortlist. Start it from Home, on its own or in a batch.'); if ((j.fit || 0) <= 3) await askFitFeedback(j, 'low'); },
   async dismiss(id) {
     const j = job(id);
     if (!await confirmBox('Dismiss this role?', `${j.company} · ${j.role} is removed and added to your blocklist.`, 'Dismiss')) return;
     j.stage = 'dismissed'; j.updated_at = now();
     S.blocklist.unshift({ id: uid('b'), kind: 'role', value: `${j.company} ${j.role}`, reason: 'Dismissed in Discovery', created_at: now(), job_url: j.job_url || '' });
     await save(); renderAll(); toast('Dismissed and added to the blocklist');
+    if ((j.fit || 0) >= 4) await askFitFeedback(j, 'high');
   },
   async closeJob(id) {
     const j = job(id), hadInt = S.interviews.some(i => i.job_id === id);
@@ -943,6 +1040,9 @@ const ACT = {
   },
   runSearch: () => runSearch(),
   startApplication: id => startApplication(id),
+  openBatch: () => openBatch(),
+  batchClaimSave: arg => batchClaimSave(arg),
+  batchClaimNA: arg => batchClaimSave(arg, true),
   draftPack: id => draftPackFor(id),
   fixAll: () => openFixAll(),
   editDraft: id => editDraft(id),
@@ -1139,6 +1239,7 @@ function parsePage(html, url) {
   if (!posting) { const t = d.querySelector('meta[property="og:title"]')?.content || d.title || ''; posting = { role: t.split(/[|–-]/)[0].trim() }; }
   return { posting, text: text.slice(0, 60000) };
 }
+const mustHaves = m => (Array.isArray(m) ? m : []).filter(x => x && x.need).slice(0, 6).map(x => ({ need: String(x.need).slice(0, 120), evidence: String(x.evidence || '').slice(0, 160), met: ['yes', 'partly', 'no'].includes(x.met) ? x.met : 'no' }));
 function openRoleForm(f) {
   const b = f.breakdown || { experience: 20, role: 15, location: f.market === 'UAE' ? 15 : 10, pay: 9, industry: 10, timing: 3 };
   const num = (k, max) => `<div class="formfield"><label for="rb-${k}">${RUBRIC.find(r => r[0] === k)[1]} (0–${max})</label><input id="rb-${k}" type="number" min="0" max="${max}" value="${+b[k] || 0}"></div>`;
@@ -1177,7 +1278,7 @@ function openRoleForm(f) {
     const dup = S.jobs.find(j => norm(j.company + ' ' + j.role) === key && !['dismissed', 'closed'].includes(j.stage));
     if (dup && !await confirmBox('This looks like a duplicate', `${dup.company} · ${dup.role} is already tracked (${statusOf(dup)}). Save another copy anyway?`, 'Save anyway')) return;
     if (fit === 1) { S.knockouts_counted = (S.knockouts_counted || 0) + 1; await save(); closeModal(); renderAll(); toast('Fit 1: counted only, not saved.'); return; }
-    const j = { id: uid('j'), company: g('r-company'), role: g('r-role'), market: g('r-market'), location: g('r-location'), industry: g('r-industry'), salary: g('r-salary'), deadline: g('r-deadline'), source: g('r-source') || 'Manual', job_url: g('r-url'), apply_url: g('r-apply') || g('r-url'), jd_text: g('r-jd'), evidence: lines(g('r-ev')), gaps: lines(g('r-gaps')), breakdown: br, fit_score: score, fit, adjacent: $('r-adj').checked, low_confidence: !!f.low_confidence || !g('r-jd') || !g('r-salary'), years_asked: f.years_asked || '', certs_asked: f.certs_asked || '', stage: fit >= 3 ? 'discovery' : 'archived', reason: fit === 2 ? lines(g('r-gaps'))[0] || 'Fit 2' : '', created_at: now(), updated_at: now(), first_seen: now().slice(0, 10), added_by: 'Add role' };
+    const j = { id: uid('j'), company: g('r-company'), role: g('r-role'), market: g('r-market'), location: g('r-location'), industry: g('r-industry'), salary: g('r-salary'), deadline: g('r-deadline'), source: g('r-source') || 'Manual', job_url: g('r-url'), apply_url: g('r-apply') || g('r-url'), jd_text: g('r-jd'), evidence: lines(g('r-ev')), gaps: lines(g('r-gaps')), breakdown: br, fit_score: score, fit, adjacent: $('r-adj').checked, low_confidence: !!f.low_confidence, must_haves: mustHaves(f.must_haves) || !g('r-jd') || !g('r-salary'), years_asked: f.years_asked || '', certs_asked: f.certs_asked || '', stage: fit >= 3 ? 'discovery' : 'archived', reason: fit === 2 ? lines(g('r-gaps'))[0] || 'Fit 2' : '', created_at: now(), updated_at: now(), first_seen: now().slice(0, 10), added_by: 'Add role' };
     S.jobs.unshift(j); await save(); closeModal(); renderAll();
     toast(fit >= 3 ? `Saved to Discovery · fit ${fit}` : 'Fit 2: saved to the screened-out archive');
     if (fit >= 3) go('discovery');
@@ -1191,6 +1292,7 @@ function openJobModal(id) {
   openModal(`<div class="eyebrow">${esc([j.market, j.location, j.industry].filter(Boolean).join(' · '))}</div><h2>${esc(j.company)} · ${esc(j.role)}</h2><p>${meta}${j.job_url ? ` · <a href="${attr(safeUrl(j.job_url))}" target="_blank" rel="noopener noreferrer">Open listing ↗</a>` : ''}</p>
    <div class="panel-head"><h2 style="font-size:17px">Why this score</h2><span class="tag green">Fit ${esc(j.fit || '—')}${j.fit_score ? ' · ' + j.fit_score + '/100' : ''}</span></div>
    ${b ? RUBRIC.map(([k, n, max]) => `<div class="meter"><span>${n}</span><div class="meterbar"><i style="width:${(+b[k] || 0) / max * 100}%"></i></div><b>${+b[k] || 0}/${max}</b></div>`).join('') : '<p class="tiny">No subscores recorded.</p>'}
+   ${(j.must_haves || []).length ? `<b class="tiny">Must-haves from the ad</b><ul class="bullets">${j.must_haves.map(m => `<li>${m.met === 'yes' ? '✓' : m.met === 'partly' ? '◐' : '✗'} ${esc(m.need)}${m.evidence ? ` <span class="tiny">· ${esc(m.evidence)}</span>` : ''}</li>`).join('')}</ul>` : ''}
    <b class="tiny">Evidence</b><ul class="bullets">${lines(j.evidence).map(x => `<li>${esc(x)}</li>`).join('') || '<li>None saved</li>'}</ul>
    <b class="tiny">Gaps and open questions</b><ul class="bullets gap">${lines(j.gaps).map(x => `<li>${esc(x)}</li>`).join('') || '<li>None recorded</li>'}</ul>
    ${j.low_confidence ? '<p class="tiny">Low confidence: thin ad or pay not stated.</p>' : ''}
@@ -1247,7 +1349,7 @@ function applySearch(run, markets, res) {
       if (S.blocklist.some(b => norm(b.value) === key || (b.kind === 'company' && norm(b.value) === norm(x.company)) || (b.kind === 'url' && b.value === x.job_url))) { f.blocked++; continue; }
       const { score, fit } = computeFit(x.breakdown, { adjacent: x.adjacent_title });
       if (fit <= 1) { f.knockout++; S.knockouts_counted++; continue; }
-      S.jobs.unshift({ id: uid('j'), company: x.company, role: x.role, market: m, location: x.location, industry: x.industry, salary: x.salary, deadline: x.deadline, source: x.source, also_seen_on: x.also_seen_on || [], job_url: x.job_url, apply_url: x.apply_url || x.job_url, jd_text: x.jd_summary, evidence: x.evidence || [], gaps: x.gaps || [], breakdown: x.breakdown, fit_score: score, fit, adjacent: !!x.adjacent_title, low_confidence: !!x.low_confidence, years_asked: x.years_asked || '', certs_asked: x.certs_asked || '', stage: fit >= 3 ? 'discovery' : 'archived', reason: fit === 2 ? (x.gaps || [])[0] || 'Fit 2' : '', created_at: now(), updated_at: now(), first_seen: now().slice(0, 10), added_by: 'Run search', run_id: run.id });
+      S.jobs.unshift({ id: uid('j'), company: x.company, role: x.role, market: m, location: x.location, industry: x.industry, salary: x.salary, deadline: x.deadline, source: x.source, also_seen_on: x.also_seen_on || [], job_url: x.job_url, apply_url: x.apply_url || x.job_url, jd_text: x.jd_summary, evidence: x.evidence || [], gaps: x.gaps || [], breakdown: x.breakdown, fit_score: score, fit, adjacent: !!x.adjacent_title, low_confidence: !!x.low_confidence, must_haves: mustHaves(x.must_haves), years_asked: x.years_asked || '', certs_asked: x.certs_asked || '', stage: fit >= 3 ? 'discovery' : 'archived', reason: fit === 2 ? (x.gaps || [])[0] || 'Fit 2' : '', created_at: now(), updated_at: now(), first_seen: now().slice(0, 10), added_by: 'Run search', run_id: run.id });
       fit >= 3 ? (f.saved++, savedTotal++) : f.archived++;
     }
     f.looked_at = Math.max(f.looked_at, f.duplicates + f.blocked + f.knockout + f.archived + f.saved);
@@ -1490,7 +1592,23 @@ const needsFix = p => !!p && p.status === 'draft' && ((p.change_requests || []).
 function packArgs(j) {
   const prev = latestPack(j.id), redo = needsFix(prev);
   const claimNotes = redo ? freshClaims(prev).map(c => c.state === 'na' ? `${c.question}: does not apply` : `${c.question}: ${c.answer}`) : [];
-  return { job: j, docs: docs(), answers: S.answers, changeRequests: prev?.change_requests || [], previous: redo ? prev : null, claimNotes };
+  return { job: j, docs: docs(), answers: S.answers, changeRequests: prev?.change_requests || [], previous: redo ? prev : null, claimNotes, naClaims: naClaimList() };
+}
+// Claims you said do not apply, in any pack: never asked or claimed again (Sere, 27 Nov: fewer claim questions)
+function naClaimList() { const seen = new Set(), out = []; for (const p of S.packs) for (const c of p.claims || []) if (c.state === 'na' && !seen.has(norm(c.question))) { seen.add(norm(c.question)); out.push(c.question); } return out.slice(-40); }
+const claimWords = t => new Set(norm(t).split(/[^a-z0-9]+/).filter(w => w.length > 3));
+function sameClaim(a, b) { if (norm(a) === norm(b)) return true; const x = claimWords(a), y = claimWords(b); if (x.size < 3 || y.size < 3) return false; let n = 0; x.forEach(w => { if (y.has(w)) n++; }); return n / new Set([...x, ...y]).size >= 0.75; }
+// A new pack's questions you already answered are filled in from your answers; ones you said don't apply are marked so
+function autoResolveClaims(p) {
+  let n = 0;
+  for (const c of p.claims) {
+    if (c.state !== 'open') continue;
+    const a = S.answers.find(x => x.confirmed && x.answer && !x.sensitive && sameClaim(x.question, c.question));
+    if (a) { c.state = 'confirmed'; c.answer = a.answer; c.carried = true; c.auto = true; n++; continue; }
+    // said "doesn't apply" before: the draft should not rely on it, so this counts towards Fix all (not carried)
+    if (naClaimList().some(q => sameClaim(q, c.question))) { c.state = 'na'; c.auto = true; n++; }
+  }
+  return n;
 }
 function applyPackResult(j, r, origin) {
   if (!r.sections || !r.cover_letter) throw Error('The reply is missing the CV sections or the cover letter. Copy the whole reply and try again.');
@@ -1501,7 +1619,7 @@ function chatPack(id) {
   if (!S.docs.master_cv) { toast('Import your setup file first (Career profile › Data & connections)'); return; }
   const isNew = !!latestPack(id);
   chatHandoff({ eyebrow: `${j.company} · ${j.role}`, title: isNew ? 'New version with Claude chat' : 'Draft the pack with Claude chat', cloudTitle: isNew ? 'Make a new version' : 'Draft the pack', prompt: AI.chatPrompt(AI.packPrompt(packArgs(j))), cloud: { kind: 'pack', ref: { job_id: id }, title: `${isNew ? 'New version' : 'Pack'} · ${j.company}` },
-    onReply: async text => { applyPackResult(j, AI.extractJson(text), 'claude-chat'); j.stage = 'review'; await save(); renderAll(); ACT.goReview(id); toast('Draft added. Answer the claims, read it, then approve.'); } });
+    onReply: async text => { applyPackResult(j, AI.extractJson(text), 'claude-chat'); j.stage = 'review'; await save(); renderAll(); ACT.goReview(id); toast('Draft added. Answer the claims, read it, then approve.' + (batchChat.length ? ` Next role in the batch: ${batchChat.length} left.` : '')); nextBatchChat(); } });
 }
 async function draftPackFor(id) {
   const j = job(id);
@@ -1523,6 +1641,7 @@ function addPack(j, { sections, cl_md, claims = [], quality = null, gaps = [], o
   p.hash = hash(cv_md + '\n' + cl_md);
   // carry over claims already answered in the previous version
   if (prev) p.claims.forEach(c => { const o = (prev.claims || []).find(x => norm(x.question) === norm(c.question) && x.state !== 'open'); if (o) { c.state = o.state; c.answer = o.answer; c.carried = true; } });
+  p.auto_claims = autoResolveClaims(p);
   S.packs.push(p);
   reviewUI[j.id] = { open: true, read: false };
   return p;

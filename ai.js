@@ -46,7 +46,16 @@ async function ask({ key, model, system, user, tools, effort = 'medium', maxToke
   return { text, usage: final.usage };
 }
 
-const RUBRIC_JSON = `"breakdown": {"experience": 0-35, "role": 0-20, "location": 0-15, "pay": 0-15, "industry": 0-10, "timing": 0-5}`;
+const RUBRIC_JSON = `"breakdown": {"experience": 0-35, "role": 0-20, "location": 0-15, "pay": 0-15, "industry": 0-10, "timing": 0-5}, "must_haves": [{"need": "one must-have from the ad, a few words", "evidence": "a few words from the Master CV that meet it, or empty", "met": "yes|partly|no"}]`;
+// Scoring details the fit rubric leaves open (Sere approved 27 Nov). Shown in the app under Career profile › Fit score.
+export const SCORING_RULES = [
+  'Experience (35): first list the ad\'s must-haves (at most 6) in "must_haves", each matched to words from the Master CV ("yes"), only partly met ("partly", e.g. an expired certification or a related skill) or not met ("no"). Score from that list: every one "yes" with strong evidence 35 · all "yes" but nice-to-haves missing 28 · one "partly" 20 · two or more "partly"/"no" 12 · the core of the job is a "no" 5. Never score higher than the list supports.',
+  'Role and seniority (20): 20 right level · 15 one step up or down (as in the rubric) · 10 two steps off (e.g. asks 15+ years, or a coordinator-level scope) · 5 far off the level.',
+  'Pay (15): when the pay is not stated, score 7 (not 9) and set low_confidence to true.',
+  'Industry (10): 10 any industry that values her background · 6 a related field where some domain knowledge helps · 3 needs niche domain experience or an accreditation she does not have.',
+  'Hiring timeline (5): 5 posted in the last 7 days, or the ad says urgent or immediate start · 3 posted 8 to 21 days ago · 1 older, or the date is unknown.',
+];
+const RULES = `<scoring_rules>\nThese fill in what the fit rubric leaves open, and win where the two differ:\n${SCORING_RULES.map(r => '- ' + r).join('\n')}\n</scoring_rules>`;
 
 /** Add role: read one ad (page text from the Chrome extension, or fetched by the assistant) and score it. */
 export function jobAdPrompt({ url, pageText, docs }) {
@@ -54,7 +63,7 @@ export function jobAdPrompt({ url, pageText, docs }) {
   const user = `Read this one job ad and fill the tracker fields. Score it with the fit rubric.\n\nJob link: ${url}\n\n` +
     (pageText ? `<job_ad_page untrusted="true">\n${pageText.slice(0, 60000)}\n</job_ad_page>\n\n` : `Fetch the job link above to read the ad. If the page needs a login or blocks access, say so in "blocked".\n\n`) +
     `Return only JSON in a \`\`\`json block with these keys:\n{"company":"","role":"","market":"UAE|UK","location":"","industry":"","salary":"as stated or empty","deadline":"YYYY-MM-DD or empty","apply_url":"","years_asked":"","certs_asked":"","jd_summary":"5-8 short lines","source":"site name", ${RUBRIC_JSON}, "adjacent_title": false, "knockout": false, "knockout_reason":"", "low_confidence": false, "evidence":["CV evidence that meets a must-have"], "gaps":["unmet or unknown requirement"], "blocked":""}`;
-  const system = `You score job ads for one candidate. ${GUARD}\n\n<fit_rubric>\n${docs.rubric}\n</fit_rubric>\n<search_profile>\n${docs.search_profile}\n</search_profile>\n<master_cv>\n${docs.master_cv}\n</master_cv>`;
+  const system = `You score job ads for one candidate. ${GUARD}\n\n<fit_rubric>\n${docs.rubric}\n</fit_rubric>\n${RULES}\n<search_profile>\n${docs.search_profile}\n</search_profile>\n<master_cv>\n${docs.master_cv}\n</master_cv>`;
   return { system, user, tools };
 }
 export async function readJobAd({ key, model, ...a }) {
@@ -77,7 +86,7 @@ export function searchPrompt({ markets, since, sources, known, blocked, docs }) 
     `Skip roles already tracked or blocked (do not open their full ads):\nTracked: ${known.slice(0, 300).join(' | ') || 'none'}\nBlocked: ${blocked.join(' | ') || 'none'}\n\n` +
     `For each market count every listing you looked at and where it dropped out. Score the rest with the rubric. Return roles with fit 2 or more (fit 1 is counted only).\n\n` +
     `Return only JSON in a \`\`\`json block:\n{"markets": {"<market>": {"looked_at": 0, "duplicates": 0, "already_tracked": 0, "blocked": 0, "knockout": 0, "knockout_reasons": {"reason": 0}, "roles": [{"company":"","role":"","location":"","industry":"","salary":"","deadline":"","job_url":"","apply_url":"","source":"","also_seen_on":[],"years_asked":"","certs_asked":"","jd_summary":"", ${RUBRIC_JSON}, "adjacent_title": false, "low_confidence": false, "evidence":[], "gaps":[]}]}}, "skipped_sources": [{"source":"","reason":""}]}`;
-  const system = `You run a careful job search for one candidate. ${GUARD} Score from available evidence and record unknowns.\n\n<fit_rubric>\n${docs.rubric}\n</fit_rubric>\n<search_profile>\n${docs.search_profile}\n</search_profile>\n<master_cv>\n${docs.master_cv}\n</master_cv>`;
+  const system = `You run a careful job search for one candidate. ${GUARD} Score from available evidence and record unknowns.\n\n<fit_rubric>\n${docs.rubric}\n</fit_rubric>\n${RULES}\n<search_profile>\n${docs.search_profile}\n</search_profile>\n<master_cv>\n${docs.master_cv}\n</master_cv>`;
   return { system, user, tools };
 }
 export async function searchRoles({ key, model, onProgress, ...a }) {
@@ -87,12 +96,14 @@ export async function searchRoles({ key, model, onProgress, ...a }) {
 }
 
 /** Start application / Build new version: draft the three tailored CV sections and the cover letter. */
-export function packPrompt({ job, docs, answers, changeRequests, previous, claimNotes = [] }) {
+export function packPrompt({ job, docs, answers, changeRequests, previous, claimNotes = [], naClaims = [] }) {
   const confirmed = answers.filter(a => a.confirmed && !a.sensitive && a.answer).map(a => `- ${a.question}: ${a.answer}`).join('\n');
   const user = `Write an application pack for this one role.\n\n<job untrusted="true">\nCompany: ${job.company}\nRole: ${job.role}\nMarket: ${job.market}\nLocation: ${job.location}\nIndustry: ${job.industry || ''}\nSalary: ${job.salary || 'not stated'}\nAd summary:\n${job.jd_text || '(no ad text saved)'}\nEvidence: ${(job.evidence || []).join(' · ')}\nGaps: ${(job.gaps || []).join(' · ')}\n</job>\n\n` +
     (previous ? `This is a new version. Previous version:\n<previous_cv_sections>\n${JSON.stringify(previous.sections)}\n</previous_cv_sections>\n<previous_letter>\n${previous.cl_md}\n</previous_letter>\n${changeRequests.length ? `Change requests from the candidate (apply all of them):\n${changeRequests.map(c => '- ' + c.note).join('\n')}\n` : ''}${claimNotes.length ? `Claim questions the candidate has answered (use the confirmed facts as written; anything marked "does not apply" must be removed or reworded so the drafts no longer rely on it):\n${claimNotes.map(c => '- ' + c).join('\n')}\n` : ''}\n` : '') +
     `Tailor only PROFESSIONAL SUMMARY, CAREER HIGHLIGHTS and CORE COMPETENCIES; every other CV section stays exactly as in the Master CV. Write the cover letter following the playbook. Then run the playbook's final quality check.\n\n` +
-    `List every claim in the drafts that the documents here do not clearly support as a claim question, so the candidate can confirm it or say it does not apply.\n\n` +
+    `Write within what the Master CV and the confirmed answers support. Where a stronger claim is not supported, use the supported, plainer version instead of stretching it.\n\n` +
+    (naClaims.length ? `The candidate has said these do not apply to them. Never claim them or anything close to them:\n${naClaims.map(c => '- ' + c).join('\n')}\n\n` : '') +
+    `Then list claim questions only for statements that are still unsupported: never ask about anything the Master CV or a confirmed answer already covers, and never repeat a question a confirmed answer already answers. List at most 3, the ones that matter most for this role; reword any other unsupported statement to what is confirmed rather than asking about it. An empty list is fine.\n\n` +
     `Return only JSON in a \`\`\`json block:\n{"sections": {"PROFESSIONAL SUMMARY": "markdown", "CAREER HIGHLIGHTS": "markdown bullets", "CORE COMPETENCIES": "markdown"}, "cover_letter": "markdown, letter body with greeting and sign-off", "claims": [{"question": "", "why": ""}], "quality": {"relevance": 0-10, "evidence": 0-10, "natural": 0-10, "ai_sounding": 0-10, "overall": 0-10, "notes": ["one line each"]}, "gaps": [""]}`;
   const system = `You draft truthful job application documents for one candidate. ${GUARD}\n\n<cover_letter_playbook>\n${docs.playbook}\n</cover_letter_playbook>\n<master_cv>\n${docs.master_cv}\n</master_cv>\n<search_profile>\n${docs.search_profile}\n</search_profile>\n<confirmed_answers>\n${confirmed || 'none'}\n</confirmed_answers>`;
   return { system, user };
